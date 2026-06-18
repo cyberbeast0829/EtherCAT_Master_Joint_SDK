@@ -1,6 +1,6 @@
 # 守护兽关节 单轴 CSP PoC
 
-验证 IgH EtherCAT Master 与本公司机器人关节（CyberBeast FL90BLW14）的
+验证 IgH EtherCAT Master 与本公司机器人关节（CyberBeast Joint Module）的
 CiA402 周期同步位置（CSP）交互链路。
 
 > 仅用于 PoC / 联调，非生产代码。文件：[csp_single.c](csp_single.c)
@@ -40,7 +40,7 @@ make ETHERLAB_DIR=/opt/etherlab
 ```bash
 # 确认主站内核模块已加载、网卡已绑定
 sudo /etc/init.d/ethercat start    # 或 systemctl start ethercat
-ethercat slaves                    # 应能看到 FL90BLW14，状态 PREOP
+ethercat slaves                    # 应能看到 CyberBeast Joint Module 对应从站，状态 PREOP
 
 # 需要 root（实时优先级 + mlockall + 访问 /dev/EtherCAT0）
 sudo ./csp_single

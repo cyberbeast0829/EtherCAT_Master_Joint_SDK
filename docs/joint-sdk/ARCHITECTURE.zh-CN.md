@@ -1,7 +1,7 @@
 # 机器人关节 EtherCAT SDK — 架构设计文档
 
-> 版本：v0.1（草案）
-> 状态：架构设计阶段（待补充关节协议文档后细化）
+> 版本：v0.2（L1/L2/L3 初版实现）
+> 状态：PoC 已在目标 IgH 主站环境初步验证；正式 SDK 的 L1/L2/L3 模块已实现；L4 外观层、多轴示例、异步 SDO 诊断仍待完善。
 > 基础平台：IgH EtherCAT Master（用户空间 `libethercat.so` / `ecrt_*` API）
 > 目标：为客户提供一套可集成进其 EtherCAT 主站系统的 SDK，快速、安全地通过 CiA402 协议与本公司机器人关节交互。
 
@@ -9,10 +9,10 @@
 
 ## 0. 文档目的与读者
 
-本文档定义 SDK 的整体架构、分层职责、实时模型、配置数据模型与交付方式，作为后续编码的蓝图。
+本文档定义 SDK 的整体架构、分层职责、实时模型、配置数据模型与交付方式，并记录当前已落地的 PoC 与 L1/L2/L3 SDK 实现状态。
 
 - **读者**：SDK 研发人员（内部）、集成客户的系统架构师（外部摘要版）。
-- **范围**：架构与接口契约设计。具体的 PDO 映射表、SDO 初始化序列、单位换算系数将在收到关节协议文档后补充到[第 11 节 待定项](#11-待定项待协议文档补充)。
+- **范围**：架构与接口契约设计、守护兽关节设备 profile、当前实现状态与后续路线。单位换算公式、异步 SDO 诊断、多轴示例仍需后续补齐。
 
 ---
 
@@ -61,10 +61,10 @@ graph TD
     end
 
     subgraph SDK["机器人关节 SDK"]
-      L4["L4 外观层: JointGroup / Joint (C ABI + C++ 封装)"]
-      L3["L3 CiA402 层: 状态机 / 模式管理 / 参数 / 单位换算"]
-      L2["L2 设备配置层: PDO 映射 / SDO 初始化（声明式描述）"]
-      L1["L1 传输层: ecrt_* 封装 / 域与 SDO 管理 / RT 边界"]
+      L4["L4 外观层: C ABI 已实现 / C++ 封装待实现"]
+      L3["L3 CiA402 层: 状态机 / 模式管理 / 关节命令反馈"]
+      L2["L2 设备配置层: CyberBeast Joint Module profile"]
+      L1["L1 传输层: ecrt_* 封装 / 域 / DC / 周期边界"]
     end
 
     subgraph IgH["IgH EtherCAT Master"]
@@ -82,7 +82,7 @@ graph TD
 - **核心句柄** `jsdk_context`：持有 `ec_master_t*`、`ec_domain_t*`、process-data 指针与域偏移表。
 - **两阶段以类型区分**：
   - 配置阶段 API（仅激活前可用）：申请主站、配置从站、注册 PDO、写配置 SDO。
-  - 周期阶段 API（激活后、rt_safe）：`jsdk_cycle_receive()` / `jsdk_cycle_send()`。
+  - 周期阶段 API（激活后、rt_safe）：`jsdk_context_cycle_begin()` / `jsdk_context_cycle_end()`。
 - 维护每个 PDO 条目的 `offset` / `bit_position`，对上层以**逻辑对象名**（如 `target_position`）访问，而非裸偏移。
 - 统一封装 `ecrt_master_state` / `ecrt_domain_state` 的健康监测（响应从站数、AL 状态、工作计数器 WKC）。
 
@@ -91,20 +91,25 @@ graph TD
 将不同关节型号的差异**数据化**，而非写死在代码中。
 
 ```c
-// 概念示意（最终字段以协议文档为准）
+// 当前实现中的 profile 关键字段（见 sdk/src/internal.h）
 typedef struct {
+    const char *name;
     uint32_t vendor_id;
     uint32_t product_code;
-    const ec_sync_info_t   *syncs;       // SM / PDO 分配与映射
-    const jsdk_sdo_init_t  *sdo_init;    // 启动 SDO（模式、电子齿轮、限值等）
-    jsdk_cia402_objmap_t    objmap;      // 0x6040/0x6041/0x607A/0x6064... 的 PDO 偏移集合
-    jsdk_dc_config_t        dc;          // 分布式时钟（DC）配置
-    jsdk_unit_scale_t       scale;       // 计数 ↔ 物理量（rad / rad·s⁻¹ / N·m）换算
+    uint32_t revision_no;
+    uint16_t dc_assign_activate;
+    uint32_t min_cycle_ns;
+    int8_t mode_csp;
+    int8_t mode_csv;
+    int8_t mode_cst;
+    const ec_sync_info_t *syncs;
 } jsdk_joint_profile_t;
 ```
 
 - 新增机型 = 新增一个 profile（如需免重编译，可从 ESI/外部文件加载）。
 - profile 通过注册表按 `(vendor_id, product_code)` 或型号名检索。
+- 当前已实现 profile：`CyberBeast Joint Module`，源码见 [docs/joint-sdk/sdk/src/profile_cyberbeast_joint_module.c](sdk/src/profile_cyberbeast_joint_module.c)。
+- 单位换算、参数 SDO、故障码字典将在后续扩展到 profile 中。
 
 ### 3.3 L3 — CiA402 层（核心价值）
 
@@ -113,7 +118,7 @@ typedef struct {
 - **DS402 状态机**：自动完成 `Switch on disabled → Ready to switch on → Switched on → Operation enabled` 迁移，依据 Statusword(0x6041) 监测、驱动 Controlword(0x6040)。检测 `Fault reaction active → Fault` 并提供 `fault_reset()`。
 - **运行模式抽象**（0x6060/0x6061）：PP（轮廓位置）/ PV（轮廓速度）/ **CSP（周期同步位置）/ CSV / CST（周期同步力矩）**。机器人关节以 CSP/CSV/CST 为一等公民。
 - **对象访问分流**：周期对象（PDO）与非周期对象（SDO request）使用不同 API。
-- **单位换算**：编码器计数 ↔ 物理量，系数取自 profile 的电子齿轮比/分辨率。
+- **单位换算**：编码器计数 ↔ 物理量，系数取自 profile 的电子齿轮比/分辨率。当前初版 SDK 仍直接使用指令单位，物理量换算待补充《CANOpen 补充手册》公式后实现。
 
 ```mermaid
 stateDiagram-v2
@@ -130,48 +135,54 @@ stateDiagram-v2
 
 ### 3.4 L4 — 外观层（客户 API）
 
-最终客户接触的最小接口。
+当前已实现稳定 C ABI，客户可以把 SDK 嵌入自己的实时循环。C++ `JointGroup` / `Joint` 薄封装仍作为后续计划。
 
-```cpp
-// C++ 外观（概念）
-JointGroup grp("0", /*period*/ 1ms);             // master0, 1 kHz
-Joint& j = grp.add_joint(alias, pos, "JointModelX");
-grp.configure();      // L1/L2: 配置 PDO/SDO/DC → activate
-grp.start();          // 启动 RT 线程
+```c
+jsdk_context_config_default(&ctx_config);
+ctx = jsdk_context_create(&ctx_config);
 
-j.enable();           // L3: 自动完成 DS402 迁移
-j.set_mode(Mode::CSP);
-// --- 周期回调内 ---
-j.set_target_position(q_cmd);    // 写 PDO（rt_safe）
-double q = j.actual_position();  // 读 PDO
+joint_config.alias = 0;
+joint_config.position = 0;
+joint_config.profile_name = JSDK_PROFILE_CYBERBEAST_JOINT_MODULE;
+
+jsdk_context_add_joint(ctx, &joint_config, &joint);
+jsdk_context_activate(ctx);
+jsdk_joint_request_enable(joint, JSDK_MODE_CSP);
+
+while (running) {
+    jsdk_context_cycle_begin(ctx, app_time_ns);
+    jsdk_joint_get_feedback(joint, &feedback);
+    jsdk_joint_set_target_position(joint, target);
+    jsdk_context_cycle_end(ctx);
+}
 ```
 
 ---
 
 ## 4. 实时线程模型
 
-SDK 拥有一条 RT 周期线程，并向客户提供两种集成形态。
+核心 SDK **不强行拥有 RT 线程**，默认采用形态 B：嵌入客户已有实时循环。客户每周期在固定时刻调用 `jsdk_context_cycle_begin()`，完成控制计算后调用 `jsdk_context_cycle_end()`。形态 A（SDK 自带 RT 线程 + 回调）可在 L4 外观层中追加。
 
 ```mermaid
 sequenceDiagram
     participant U as 客户控制逻辑
-    participant RT as SDK RT 周期线程
+  participant RT as 客户/SDK 周期上下文
     participant IgH as ecrt_*
 
     loop 每周期 (如 1ms, DC 同步)
-        RT->>IgH: ecrt_master_receive()
-        RT->>IgH: ecrt_domain_process()
+    U->>RT: jsdk_context_cycle_begin(app_time)
+    RT->>IgH: application_time / receive / domain_process
         RT->>RT: 反映 Statusword / DS402 迁移 / 单位换算
-        RT->>U: user_cycle_cb() 回调
-        U-->>RT: 写入 target 值
+    RT-->>U: 返回反馈快照
+    U->>RT: set_target_position/velocity/torque
         RT->>RT: 将 Controlword/Target 写入 PDO
-        RT->>IgH: ecrt_domain_queue()
-        RT->>IgH: ecrt_master_send()
+    U->>RT: jsdk_context_cycle_end()
+    RT->>IgH: sync clocks / domain_queue / send
     end
 ```
 
-- **形态 A（回调）**：客户只在 `user_cycle_cb` 中写运动逻辑，SDK 负责定时、DC 同步、WKC 监测。
-- **形态 B（嵌入既有循环）**：客户已有 RT 循环时，只需每周期调用 `grp.cycle()`，SDK 不另起线程。
+- **形态 B（已实现）**：客户已有 RT 循环时，每周期调用 `jsdk_context_cycle_begin()` / `jsdk_context_cycle_end()`，SDK 不另起线程，对客户系统侵入最小。
+- **形态 A（待实现）**：SDK 自带 RT 线程和 `user_cycle_cb`，适合没有现成实时循环的客户样例或快速验证。
 - **RT 安全**（遵循 [master/api_usage_notes.md](../../master/api_usage_notes.md)）：周期上下文禁止 sleep/malloc/加锁；SDO 走异步请求（`ecrt_sdo_request_*` + 状态轮询），不阻塞周期；跨线程数据用无锁环/双缓冲。
 
 ---
@@ -180,20 +191,20 @@ sequenceDiagram
 
 | 数据 | 通道 | API 示例 |
 |------|------|---------|
-| 目标位置/速度/力矩、Controlword | **PDO（周期）** | `set_target_*()` |
-| 实际位置/速度/力矩、Statusword | **PDO（周期）** | `actual_*()` |
+| 目标位置/速度/力矩、Controlword | **PDO（周期）** | `jsdk_joint_set_target_*()` |
+| 实际位置/速度/力矩、Statusword | **PDO（周期）** | `jsdk_joint_get_feedback()` |
 | 电子齿轮、模式切换、PID/限值 | **启动 SDO** | profile 的 `sdo_init` |
 | 运行中参数调整 / 诊断读取 | **异步 SDO** | `j.write_param()/read_param()`（非阻塞，完成通知） |
 
-> 机器人关节常需"不停机切换模式/调增益"，故运行期 SDO 由 `JointGroup` 的**非 RT 服务线程**处理，结果以回调 / future 返回。
+> 当前初版已实现 PDO 周期读写、启动时模式 SDO（0x6060=CSP）和 DC 配置；运行期异步 SDO 参数/诊断线程仍待实现。
 
 ---
 
 ## 6. 错误模型与诊断
 
-- 返回码 + 详情查询（`jsdk_last_error()`）；RT 路径**不抛异常**。
-- 分级诊断：总线级（WKC、链路、响应从站数）、从站级（AL 状态、online/operational）、轴级（CiA402 Statusword 故障位、0x603F Error Code）。
-- 提供故障回调 `on_fault(axis, code)`，并支持 `fault_reset()`。
+- 返回码 + 详情查询（`jsdk_context_last_error()`）；RT 路径**不抛异常**。
+- 已实现基础分级诊断：总线级（WKC、链路、响应从站数、AL 状态）、从站级（online/operational/AL state）、轴级（Statusword、模式显示、实际位置/速度/力矩、CiA402 状态）。
+- 已实现 `jsdk_joint_request_fault_reset()`；`on_fault(axis, code)` 回调、0x603F/0x1001/0x203E/0x203F 详细 SDO 读取仍待实现。
 
 ---
 
@@ -208,46 +219,47 @@ profile 是 SDK 与具体关节型号之间的契约，至少包含：
 5. **DC 配置**：是否启用 DC、周期、shift time。
 6. **单位换算**：计数/圈、减速比、力矩常数 → rad、rad/s、N·m。
 
-> 上述字段的**具体取值**将在收到关节协议文档后填入第 11 节。
+> CyberBeast Joint Module 的静态字段已由 ESI 文件和协议手册固化到 L2 profile；单位换算、详细故障码、参数 SDO 仍需后续扩展。
 
 ---
 
 ## 8. 交付与 ABI 策略
 
 - **核心 = 稳定 C ABI**（`joint_sdk.h`），不依赖客户编译器/语言；版本校验需覆盖 IgH 的 `EC_IOCTL_VERSION_MAGIC` 兼容性。
-- **C++ 头文件薄封装**随包提供。
+- **C++ 头文件薄封装**计划随包提供，当前尚未实现。
 - **依赖隔离**：在 L1 用薄 shim 收拢 `ecrt_*` 调用以吸收 IgH 版本差异，并在文档中标注支持的 IgH 版本范围。
-- **交付物**：`libjointsdk.so` + 头文件 + 关节 profile + 示例（单轴 CSP、多轴同步、SDO 诊断）+ 集成指南。
+- **当前交付物**：`libjointsdk.a` / `libjointsdk.so` 构建规则 + C ABI 头文件 + 守护兽 profile + 单轴 CSP SDK 示例。多轴同步、CSV/CST 示例、SDO 诊断示例仍待补齐。
 
 ---
 
-## 9. 推荐 SDK 仓库结构（新建独立仓库）
+## 9. 当前 SDK 目录结构
 
 ```
-joint-ecat-sdk/
+docs/joint-sdk/sdk/
+├── Makefile                 # 构建 libjointsdk.a / libjointsdk.so / 示例
 ├── include/joint_sdk/
-│   ├── joint_sdk.h          # C ABI（核心）
-│   ├── joint_group.hpp      # C++ 外观
-│   └── cia402.h             # DS402 常量 / 状态定义
+│   ├── joint_sdk.h          # C ABI（已实现）
+│   └── cia402.h             # DS402 常量 / 状态定义（已实现）
 ├── src/
-│   ├── transport/           # L1: ecrt_* 封装, 域/SDO, RT 线程
-│   ├── profile/             # L2: profile 加载 / 注册表
-│   ├── cia402/              # L3: 状态机, 模式, 单位换算
-│   └── facade/              # L4: JointGroup / Joint 实现
-├── profiles/                # 各关节型号描述（X.json / X.c）
-├── examples/                # csp_single / multi_axis / sdo_diag
-└── docs/                    # 集成指南, API 参考
+│   ├── transport.c          # L1: ecrt_* 封装, domain, DC, 周期边界
+│   ├── profile_cyberbeast_joint_module.c # L2: 守护兽通用关节 profile
+│   ├── cia402.c             # L3: DS402 状态机
+│   └── internal.h           # SDK 内部结构
+└── examples/
+    └── csp_single_sdk.c     # 基于正式 SDK 的单轴 CSP 示例
 ```
+
+旧 PoC 仍保留在 [docs/joint-sdk/poc/csp_single.c](poc/csp_single.c)，用于和 SDK 示例交叉对照。
 
 ---
 
 ## 10. 分阶段实施路线
 
-1. **PoC**：基于 [examples/user/main.c](../../examples/user/main.c)，在 L1 上以 CSP 跑通单轴（DS402 先手动实现）。
-2. **抽出 L3**：将 DS402 状态机与单位换算模块化。
-3. **声明化 L2**：先把 1 个型号 profile 化 → 扩展到多轴 / 多型号。
-4. **L4 外观 + 固化 C ABI** → 完善示例与文档。
-5. **扩展**：DC 高精度同步、异步 SDO 诊断、回零（HM）、故障处理体系化。
+1. **已完成：PoC**。基于 [examples/user/main.c](../../examples/user/main.c) 与 [docs/joint-sdk/poc/csp_single.c](poc/csp_single.c)，单轴 CSP 已在目标 IgH 主站环境初步验证成功。
+2. **已完成：L1/L2/L3 初版 SDK**。L1 传输层、L2 守护兽 profile、L3 DS402 状态机已拆分到 [docs/joint-sdk/sdk](sdk)。
+3. **进行中：SDK 示例联调**。使用 [docs/joint-sdk/sdk/examples/csp_single_sdk.c](sdk/examples/csp_single_sdk.c) 替代旧 PoC，验证拆分后的 SDK 链路与原 PoC 行为一致。
+4. **下一阶段：多轴与三模式扩展**。补多轴 CSP 示例、CSV 示例、CST 示例，验证 1~10 轴 DC 同步与 WKC/AL 状态监测。
+5. **后续扩展**：异步 SDO 参数/诊断、详细故障码读取、单位换算、L4 C++ 外观、自带 RT 线程封装、打包交付与集成文档。
 
 ---
 
@@ -314,7 +326,7 @@ TPDO（从站→主站，输入）三选一，经 0x1C13:01 选择：
 | 0x60C2:1/:2 | 插补时间（单位 / 索引） | U8/I8 | DC 周期匹配 |
 | 0x603F / 0x1001 | 故障码 / 错误寄存器 | U16 / U8 | 故障分类 |
 | 0x203F / 0x203E | 伺服故障码（低/高 32 位） | U32 | 厂商详细故障 |
-| 0x1018:1/:2 | 厂商 ID / 产品编码 | U32 | `ecrt_master_slave_config` 校验 **（具体数值待读取实物）** |
+| 0x1018:1/:2 | 厂商 ID / 产品编码 | U32 | `ecrt_master_slave_config` 校验；ESI 已确认为 vendor 0x000C0B00 / product 0x00080153 |
 | 0x6502 | 支持的控制模式 | U32 = 0x761 | 能力位 |
 | 0x2008 | 增益（速度/位置/电流环 PID，0.01） | U16 | 可选调参 |
 | 0x200A | 故障与保护参数（温度/母线电流电压限值） | 混合 | 可选配置 |
@@ -339,7 +351,7 @@ TPDO（从站→主站，输入）三选一，经 0x1C13:01 选择：
 | 项目 | 确认值 |
 |------|--------|
 | Vendor Name / **Vendor ID** | CyberBeast / **0x000C0B00** |
-| Device Type / **Product Code** | FL90BLW14 / **0x00080153**（RevisionNo 0x00000001） |
+| Device Type / **Product Code** | CyberBeast Joint Module / **0x00080153**（RevisionNo 0x00000001；当前 ESI 设备类型字符串来自厂商 XML） |
 | 设备组 | Robot_Joint_Actuator |
 | Profile | CiA **402** |
 | **SM 布局** | SM0=MBoxOut@0x1000, SM1=MBoxIn@0x1080, **SM2=Outputs(RxPDO), SM3=Inputs(TxPDO)** |
@@ -357,7 +369,7 @@ TPDO（从站→主站，输入）三选一，经 0x1C13:01 选择：
 
 ### 11.8 仍需联调确认的点（标注 ⚠）
 
-- [ ] 0x6060 模式编码值（按 CiA402 标准应为 **8=CSP / 9=CSV / 10=CST**，ESI/手册未直接给出数值，PoC 时以实物确认）。
+- [ ] 0x6060 模式编码值（按 CiA402 标准应为 **8=CSP / 9=CSV / 10=CST**，ESI/手册未直接给出数值，SDK 示例联调时以实物 SDO/反馈确认）。
 - [ ] 0x6071/0x6077 转矩单位的确切定义（手册有 0.1% 额定转矩 vs 0.001 N·m×额定转矩两种表述）。
 - [ ] 《CANOpen 补充手册》转换因子的完整公式（位置/速度指令单位 ↔ rad、rad/s）。
 - [ ] 0x60C2 插补时间与所选 DC 周期的配置关系。
@@ -374,15 +386,37 @@ TPDO（从站→主站，输入）三选一，经 0x1C13:01 选择：
 | D1 | 控制模式 | **同时一等支持 CSP / CSV / CST**；统一采用 0x1600/0x1A00 全功能 PDO，运行时仅切 0x6060，不改 PDO 分配。默认 CSP。 |
 | D2 | 轴数 | 典型 1~10 轴，**最大不设硬上限**；架构按 N 轴可扩展设计（单 domain 容纳多轴 PDO，按 DC 周期表评估最小周期）。 |
 | D3 | RT 环境 | 业务方未指定。**首选 PREEMPT_RT**（最通用、部署门槛低），同时在 L1 用薄 shim 隔离 `ecrt_*`，保留对 Xenomai/RTAI 的可移植性。文档标注三种环境的适配说明。 |
-| D4 | 集成形态 | **两种都提供，默认形态 B（嵌入客户既有 RT 循环，`grp.cycle()`）**——对客户已有主站系统侵入最小、最易落地；形态 A（SDK 自带 RT 线程 + 回调）作为可选便利封装。 |
+| D4 | 集成形态 | **两种都提供，默认形态 B（嵌入客户既有 RT 循环，`jsdk_context_cycle_begin()` / `jsdk_context_cycle_end()`）**——对客户已有主站系统侵入最小、最易落地；形态 A（SDK 自带 RT 线程 + 回调）作为可选便利封装。 |
 | D5 | 总线范围 | **仅支持本公司关节**；profile 注册表按 (vendor_id, product_code) 校验，非本公司从站直接拒绝配置，简化测试面与责任边界。 |
 | D6 | DC | **强制 DC**（设备仅支持 DC，ESI AssignActivate=**0x300**）；SDK 自动配置 SYNC0=周期、shift time=周期/4，并校验周期 ≥ 设备最小值（按轴数查表）。 |
 
 ---
 
-## 13. 下一步
+## 13. 当前实现状态
 
-1. ESI 已敲定厂商/产品 ID、SM 布局、DC AssignActivate 与全功能 PDO；剩余 11.8 节 ⚠ 项（尤其 0x6060 模式编码、转矩单位、转换因子公式）在 PoC 联调时用实物 SDO 确认。
-2. 编写 **PoC**：基于 [examples/user/main.c](../../examples/user/main.c)，单轴 CSP 跑通——`ecrt_master_slave_config(.., 0x000C0B00, 0x00080153)`、配置 0x1C12←0x1600/0x1C13←0x1A00、配置 DC（AssignActivate=0x300, SYNC0=周期, shift=周期/4）、手动 DS402 使能、周期写 0x607A / 读 0x6064。
-3. 据 PoC 抽出 L3（DS402 + 模式 + 单位换算）与 L2（守护兽 profile：vendor 0x000C0B00 / product 0x00080153），再扩到多轴与 CSV/CST。
-```
+| 模块/能力 | 状态 | 说明 |
+|-----------|------|------|
+| PoC 单轴 CSP | **已完成初步实物验证** | 旧 PoC 位于 [docs/joint-sdk/poc/csp_single.c](poc/csp_single.c)，已在已安装 IgH master、网卡已绑定的目标环境中初步验证成功。 |
+| 公共 C ABI | **已实现初版** | 头文件位于 [docs/joint-sdk/sdk/include/joint_sdk/joint_sdk.h](sdk/include/joint_sdk/joint_sdk.h)，提供 context、joint、周期 begin/end、命令、反馈、状态查询接口。 |
+| L1 传输层 | **已实现初版** | [docs/joint-sdk/sdk/src/transport.c](sdk/src/transport.c) 封装 master/domain/slave config/PDO/DC/周期收发。 |
+| L2 设备 profile | **已实现初版** | [docs/joint-sdk/sdk/src/profile_cyberbeast_joint_module.c](sdk/src/profile_cyberbeast_joint_module.c) 固化 CyberBeast Joint Module 的 vendor/product、PDO、DC、模式编码。 |
+| L3 CiA402 状态机 | **已实现初版** | [docs/joint-sdk/sdk/src/cia402.c](sdk/src/cia402.c) 实现 enable/disable/fault reset 与状态解析。 |
+| SDK 单轴 CSP 示例 | **已实现，待目标机联调** | [docs/joint-sdk/sdk/examples/csp_single_sdk.c](sdk/examples/csp_single_sdk.c) 使用正式 SDK 替代旧 PoC。 |
+| 构建脚本 | **已实现** | [docs/joint-sdk/sdk/Makefile](sdk/Makefile) 构建 `libjointsdk.a`、`libjointsdk.so` 和 `csp_single_sdk`。 |
+| 多轴示例 | **待实现** | 计划先 2 轴 CSP，再扩到 1~10 轴。 |
+| CSV/CST 示例 | **待实现** | 复用全功能 PDO，运行时切 0x6060。 |
+| 异步 SDO 诊断 | **待实现** | 目标对象：0x603F、0x1001、0x203F、0x203E 及参数调节对象。 |
+| 单位换算 | **待协议补充后实现** | 等待《CANOpen 补充手册》的位置/速度/力矩转换公式。 |
+| L4 C++ 外观层 / 自带 RT 线程 | **待实现** | 当前核心 SDK 采用嵌入客户实时循环的 C ABI。 |
+
+---
+
+## 14. 下一步
+
+1. **在目标 Linux/IgH 环境编译并运行 SDK 示例**：`cd docs/joint-sdk/sdk && make ETHERLAB_DIR=/opt/etherlab && sudo ./build/csp_single_sdk`。目标是确认正式 SDK 拆分后仍能进入 `operation_enabled` 并执行小幅 CSP 轨迹。
+2. **若遇到 profile 名称不匹配错误，先 clean rebuild**：`make clean && make ETHERLAB_DIR=/opt/etherlab`。`JSDK_PROFILE_CYBERBEAST_JOINT_MODULE` 是推荐名称；`FL90BLW14` 仅作为旧 ESI/旧示例兼容别名保留。
+3. **记录 SDK 示例联调结果**：对比旧 PoC 与 SDK 示例的 `statusword`、`mode_display`、`actual_position`、WKC、AL state；若行为一致，标记 L1/L2/L3 初版闭环完成。
+4. **补多轴支持验证**：先做 2 轴 CSP，再扩到典型 1~10 轴，确认 domain 偏移、DC 参考时钟、WKC、同步错误恢复逻辑。
+5. **补 CSV/CST 示例**：复用 0x1600/0x1A00 全功能 PDO，运行时切 0x6060，分别验证 `target_velocity` 和 `target_torque`。
+6. **补异步 SDO 诊断**：读取 0x603F、0x1001、0x203F、0x203E；实现非 RT 服务线程或轮询式请求接口。
+7. **补单位换算与 L4 外观层**：根据《CANOpen 补充手册》实现指令单位 ↔ rad/rad/s/N·m，再封装 C++ `JointGroup` / `Joint`。
