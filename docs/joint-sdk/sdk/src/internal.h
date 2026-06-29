@@ -38,6 +38,18 @@ typedef struct jsdk_joint_profile {
     int8_t mode_csv;
     int8_t mode_cst;
     const ec_sync_info_t *syncs;
+
+    /* PDO entry arrays for transport-layer registration.
+     * For ESI-loaded profiles these point into the heap_block.
+     * For static profiles they point to const arrays. */
+    unsigned int rx_entry_count;
+    unsigned int tx_entry_count;
+    const ec_pdo_entry_info_t *rx_entries;
+    const ec_pdo_entry_info_t *tx_entries;
+
+    /* Heap memory block. Non-NULL means this profile was heap-allocated
+     * and jsdk_profile_destroy() will free it. */
+    void *heap_block;
 } jsdk_joint_profile_t;
 
 typedef struct {
@@ -74,6 +86,10 @@ struct jsdk_context {
     jsdk_context_config_t config;
     jsdk_joint_t **joints;
     unsigned int joint_count;
+    /* Heap-allocated profiles loaded from ESI; freed on destroy. */
+    const jsdk_joint_profile_t **loaded_profiles;
+    unsigned int loaded_profile_count;
+    unsigned int loaded_profile_capacity;
     int configured;
     int activated;
     char last_error[256];

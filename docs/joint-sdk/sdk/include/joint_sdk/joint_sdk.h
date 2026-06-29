@@ -115,6 +115,24 @@ int jsdk_joint_is_fault(jsdk_joint_t *joint);
 const char *jsdk_status_string(jsdk_status_t status);
 const char *jsdk_axis_state_string(jsdk_axis_state_t state);
 
+/* === ESI XML 动态加载 === */
+
+/* 从 ESI XML 文件加载关节 profile。
+ * 若 vendor_id 或 product_code 为 0 则不校验，取文件中第一个匹配项。
+ * 返回的 profile 可通过 jsdk_profile_destroy() 释放。
+ * 也可直接将返回的 profile 名字传给 jsdk_joint_config_t::profile_name。
+ * 失败返回 NULL。 */
+const struct jsdk_joint_profile *jsdk_profile_load_from_esi(
+        const char *esi_path,
+        uint32_t vendor_id,
+        uint32_t product_code);
+
+/* 释放 jsdk_profile_load_from_esi() 返回的 profile。 */
+void jsdk_profile_destroy(const struct jsdk_joint_profile *profile);
+
+/* 获取 profile 的名称字符串，可用于 jsdk_joint_config_t::profile_name。 */
+const char *jsdk_profile_get_name(const struct jsdk_joint_profile *profile);
+
 #ifdef __cplusplus
 }
 #endif

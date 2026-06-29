@@ -16,7 +16,8 @@ DIAG_EXAMPLE = $(BUILD_DIR)/diag_csp_single
 SDK_SRCS = \
 	src/transport.c \
 	src/cia402.c \
-	src/profile_cyberbeast_joint_module.c
+	src/profile_cyberbeast_joint_module.c \
+	src/esi_parser.c
 SDK_OBJS = $(patsubst src/%.c,$(BUILD_DIR)/%.o,$(SDK_SRCS))
 
 .PHONY: all clean example diag

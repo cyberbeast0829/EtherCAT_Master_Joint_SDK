@@ -122,7 +122,11 @@ int main(int argc, char **argv)
     memset(&joint_config, 0, sizeof(joint_config));
     joint_config.alias = 0;
     joint_config.position = 0;
-    joint_config.profile_name = JSDK_PROFILE_CYBERBEAST_JOINT_MODULE;
+    /* 默认用 ESI 文件动态加载（不依赖编译期 profile）
+       若仅验证链路可用内置 profile:
+         joint_config.profile_name = JSDK_PROFILE_CYBERBEAST_JOINT_MODULE;
+    */
+    joint_config.profile_name = "./ECAT_CIA402.xml";
 
     status = jsdk_context_add_joint(ctx, &joint_config, &joint);
     if (status != JSDK_OK) {

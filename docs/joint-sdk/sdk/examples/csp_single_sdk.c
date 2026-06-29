@@ -102,7 +102,10 @@ int main(int argc, char **argv)
     memset(&joint_config, 0, sizeof(joint_config));
     joint_config.alias = 0;
     joint_config.position = 0;
+    /* 方式 A：使用内置编译期 profile（向后兼容） */
     joint_config.profile_name = JSDK_PROFILE_CYBERBEAST_JOINT_MODULE;
+    /* 方式 B：从 ESI XML 动态加载（免重编译，适合多型号）
+       joint_config.profile_name = "./ECAT_CIA402.xml"; */
 
     status = jsdk_context_add_joint(ctx, &joint_config, &joint);
     if (status != JSDK_OK) {

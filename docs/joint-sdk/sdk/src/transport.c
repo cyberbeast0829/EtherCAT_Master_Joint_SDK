@@ -4,6 +4,7 @@
 #include <string.h>
 
 #include "internal.h"
+#include "esi_parser.h"
 
 void jsdk_set_error(jsdk_context_t *ctx, const char *fmt, ...)
 {
@@ -27,83 +28,102 @@ static int valid_mode(const jsdk_joint_t *joint, jsdk_mode_t mode)
         value == joint->profile->mode_cst;
 }
 
-static jsdk_status_t register_pdo_entry(jsdk_joint_t *joint, uint16_t index,
-        uint8_t subindex, unsigned int *offset)
+/** 把 CoE 对象索引映射到 jsdk_pdo_offsets_t 中的对应字段。 */
+static unsigned int *offset_for_object(jsdk_joint_t *joint,
+        uint16_t index, uint8_t subindex)
 {
-    unsigned int bit_position = 0;
-    int ret;
-
-    ret = ecrt_slave_config_reg_pdo_entry(joint->sc, index, subindex,
-            joint->ctx->domain, &bit_position);
-    if (ret < 0) {
-        jsdk_set_error(joint->ctx,
-                "failed to register PDO entry 0x%04X:%u for position %u: %d",
-                index, subindex, joint->position, ret);
-        return JSDK_ERR_ECRT;
+    (void)subindex;
+    switch (index) {
+    case JSDK_CIA402_CONTROLWORD:      return &joint->offsets.controlword;
+    case JSDK_CIA402_TARGET_POSITION:  return &joint->offsets.target_position;
+    case JSDK_CIA402_TARGET_VELOCITY:  return &joint->offsets.target_velocity;
+    case JSDK_CIA402_TARGET_TORQUE:    return &joint->offsets.target_torque;
+    case JSDK_CIA402_MODE_OF_OPERATION:return &joint->offsets.mode_of_operation;
+    case JSDK_CIA402_STATUSWORD:       return &joint->offsets.statusword;
+    case JSDK_CIA402_ACTUAL_POSITION:  return &joint->offsets.actual_position;
+    case JSDK_CIA402_ACTUAL_VELOCITY:  return &joint->offsets.actual_velocity;
+    case JSDK_CIA402_ACTUAL_TORQUE:    return &joint->offsets.actual_torque;
+    case JSDK_CIA402_MODE_DISPLAY:     return &joint->offsets.mode_display;
+    default: return NULL;
     }
-
-    if (bit_position) {
-        jsdk_set_error(joint->ctx,
-                "PDO entry 0x%04X:%u is not byte aligned (bit %u)",
-                index, subindex, bit_position);
-        return JSDK_ERR_UNSUPPORTED;
-    }
-
-    *offset = (unsigned int)ret;
-    return JSDK_OK;
 }
 
 static jsdk_status_t register_joint_pdos(jsdk_joint_t *joint)
 {
-    jsdk_status_t status;
+    const jsdk_joint_profile_t *p = joint->profile;
+    unsigned int i;
 
-    status = register_pdo_entry(joint, JSDK_CIA402_CONTROLWORD, 0,
-            &joint->offsets.controlword);
-    if (status != JSDK_OK) {
-        return status;
+    /* Register RxPDO entries */
+    for (i = 0; i < p->rx_entry_count; i++) {
+        const ec_pdo_entry_info_t *e = &p->rx_entries[i];
+        unsigned int *off;
+
+        if (e->index == 0x0000) continue; /* padding */
+        off = offset_for_object(joint, e->index, e->subindex);
+        if (!off) {
+            jsdk_set_error(joint->ctx,
+                    "unrecognized RxPDO object 0x%04X:%u at pos %u",
+                    e->index, e->subindex, joint->position);
+            return JSDK_ERR_UNSUPPORTED;
+        }
+
+        {
+            unsigned int bit_position = 0;
+            int ret = ecrt_slave_config_reg_pdo_entry(joint->sc,
+                    e->index, e->subindex, joint->ctx->domain,
+                    &bit_position);
+            if (ret < 0) {
+                jsdk_set_error(joint->ctx,
+                        "failed to register RxPDO entry 0x%04X:%u: %d",
+                        e->index, e->subindex, ret);
+                return JSDK_ERR_ECRT;
+            }
+            if (bit_position) {
+                jsdk_set_error(joint->ctx,
+                        "RxPDO entry 0x%04X:%u not byte-aligned (bit %u)",
+                        e->index, e->subindex, bit_position);
+                return JSDK_ERR_UNSUPPORTED;
+            }
+            *off = (unsigned int)ret;
+        }
     }
-    status = register_pdo_entry(joint, JSDK_CIA402_TARGET_POSITION, 0,
-            &joint->offsets.target_position);
-    if (status != JSDK_OK) {
-        return status;
+
+    /* Register TxPDO entries */
+    for (i = 0; i < p->tx_entry_count; i++) {
+        const ec_pdo_entry_info_t *e = &p->tx_entries[i];
+        unsigned int *off;
+
+        if (e->index == 0x0000) continue;
+        off = offset_for_object(joint, e->index, e->subindex);
+        if (!off) {
+            jsdk_set_error(joint->ctx,
+                    "unrecognized TxPDO object 0x%04X:%u at pos %u",
+                    e->index, e->subindex, joint->position);
+            return JSDK_ERR_UNSUPPORTED;
+        }
+
+        {
+            unsigned int bit_position = 0;
+            int ret = ecrt_slave_config_reg_pdo_entry(joint->sc,
+                    e->index, e->subindex, joint->ctx->domain,
+                    &bit_position);
+            if (ret < 0) {
+                jsdk_set_error(joint->ctx,
+                        "failed to register TxPDO entry 0x%04X:%u: %d",
+                        e->index, e->subindex, ret);
+                return JSDK_ERR_ECRT;
+            }
+            if (bit_position) {
+                jsdk_set_error(joint->ctx,
+                        "TxPDO entry 0x%04X:%u not byte-aligned (bit %u)",
+                        e->index, e->subindex, bit_position);
+                return JSDK_ERR_UNSUPPORTED;
+            }
+            *off = (unsigned int)ret;
+        }
     }
-    status = register_pdo_entry(joint, JSDK_CIA402_TARGET_VELOCITY, 0,
-            &joint->offsets.target_velocity);
-    if (status != JSDK_OK) {
-        return status;
-    }
-    status = register_pdo_entry(joint, JSDK_CIA402_TARGET_TORQUE, 0,
-            &joint->offsets.target_torque);
-    if (status != JSDK_OK) {
-        return status;
-    }
-    status = register_pdo_entry(joint, JSDK_CIA402_MODE_OF_OPERATION, 0,
-            &joint->offsets.mode_of_operation);
-    if (status != JSDK_OK) {
-        return status;
-    }
-    status = register_pdo_entry(joint, JSDK_CIA402_STATUSWORD, 0,
-            &joint->offsets.statusword);
-    if (status != JSDK_OK) {
-        return status;
-    }
-    status = register_pdo_entry(joint, JSDK_CIA402_ACTUAL_POSITION, 0,
-            &joint->offsets.actual_position);
-    if (status != JSDK_OK) {
-        return status;
-    }
-    status = register_pdo_entry(joint, JSDK_CIA402_ACTUAL_VELOCITY, 0,
-            &joint->offsets.actual_velocity);
-    if (status != JSDK_OK) {
-        return status;
-    }
-    status = register_pdo_entry(joint, JSDK_CIA402_ACTUAL_TORQUE, 0,
-            &joint->offsets.actual_torque);
-    if (status != JSDK_OK) {
-        return status;
-    }
-    return register_pdo_entry(joint, JSDK_CIA402_MODE_DISPLAY, 0,
-            &joint->offsets.mode_display);
+
+    return JSDK_OK;
 }
 
 static void read_joint_feedback(jsdk_joint_t *joint)
@@ -150,6 +170,19 @@ static void write_joint_command(jsdk_joint_t *joint)
             joint->command.target_velocity);
     EC_WRITE_S16(pd + joint->offsets.target_torque,
             joint->command.target_torque);
+}
+
+const jsdk_joint_profile_t *jsdk_profile_load_from_esi(
+        const char *esi_path,
+        uint32_t vendor_id,
+        uint32_t product_code)
+{
+    return esi_profile_load(esi_path, vendor_id, product_code);
+}
+
+const char *jsdk_profile_get_name(const struct jsdk_joint_profile *profile)
+{
+    return profile ? profile->name : NULL;
 }
 
 void jsdk_context_config_default(jsdk_context_config_t *config)
@@ -214,6 +247,10 @@ void jsdk_context_destroy(jsdk_context_t *ctx)
     for (i = 0; i < ctx->joint_count; i++) {
         free(ctx->joints[i]);
     }
+    for (i = 0; i < ctx->loaded_profile_count; i++) {
+        jsdk_profile_destroy(ctx->loaded_profiles[i]);
+    }
+    free(ctx->loaded_profiles);
     free(ctx->joints);
     free(ctx);
 }
@@ -237,7 +274,30 @@ jsdk_status_t jsdk_context_add_joint(jsdk_context_t *ctx,
         return JSDK_ERR_BAD_STATE;
     }
 
-    profile = jsdk_profile_find(config->profile_name);
+    /* 如果 profile_name 看起来像文件路径（含 .xml 或 /），从 ESI 加载 */
+    if (config->profile_name &&
+            (strstr(config->profile_name, ".xml") ||
+             strchr(config->profile_name, '/'))) {
+        /* Load and store in context for cleanup */
+        if (ctx->loaded_profile_count >= ctx->loaded_profile_capacity) {
+            unsigned int new_cap = ctx->loaded_profile_capacity
+                ? ctx->loaded_profile_capacity * 2 : 4;
+            const jsdk_joint_profile_t **tmp = realloc(
+                    ctx->loaded_profiles,
+                    new_cap * sizeof(ctx->loaded_profiles[0]));
+            if (!tmp) return JSDK_ERR_NO_MEMORY;
+            ctx->loaded_profiles = tmp;
+            ctx->loaded_profile_capacity = new_cap;
+        }
+
+        profile = esi_profile_load(config->profile_name, 0, 0);
+        if (profile) {
+            ctx->loaded_profiles[ctx->loaded_profile_count++] = profile;
+        }
+    }
+    if (!profile) {
+        profile = jsdk_profile_find(config->profile_name);
+    }
     if (!profile) {
         jsdk_set_error(ctx, "unsupported joint profile '%s' "
             "(supported: %s, %s, default; legacy alias: FL90BLW14)",

@@ -52,7 +52,12 @@ static const jsdk_joint_profile_t cb_joint_profile = {
     JSDK_MODE_CSP,
     JSDK_MODE_CSV,
     JSDK_MODE_CST,
-    cb_joint_syncs
+    cb_joint_syncs,
+    /* PDO entry arrays (same order as ec_pdo_entry_info_t above) */
+    6, 6,
+    cb_joint_rx_entries,
+    cb_joint_tx_entries,
+    NULL  /* heap_block: static profile, no heap */
 };
 
 const jsdk_joint_profile_t *jsdk_profile_cyberbeast_joint_module(void)
