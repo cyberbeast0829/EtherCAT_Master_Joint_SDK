@@ -13,6 +13,7 @@ LIB_SHARED = $(BUILD_DIR)/libjointsdk.so
 EXAMPLE = $(BUILD_DIR)/csp_single_sdk
 DIAG_EXAMPLE = $(BUILD_DIR)/diag_csp_single
 CSV_EXAMPLE = $(BUILD_DIR)/diag_csv_single
+CST_EXAMPLE = $(BUILD_DIR)/diag_cst_single
 
 SDK_SRCS = \
 	src/transport.c \
@@ -21,13 +22,14 @@ SDK_SRCS = \
 	src/esi_parser.c
 SDK_OBJS = $(patsubst src/%.c,$(BUILD_DIR)/%.o,$(SDK_SRCS))
 
-.PHONY: all clean example diag csv
+.PHONY: all clean example diag csv cst
 
-all: $(LIB_STATIC) $(LIB_SHARED) example diag csv
+all: $(LIB_STATIC) $(LIB_SHARED) example diag csv cst
 
 example: $(EXAMPLE)
 diag: $(DIAG_EXAMPLE)
 csv: $(CSV_EXAMPLE)
+cst: $(CST_EXAMPLE)
 
 $(BUILD_DIR):
 	mkdir -p $(BUILD_DIR)
@@ -48,6 +50,9 @@ $(DIAG_EXAMPLE): examples/diag_csp_single.c $(LIB_STATIC)
 	$(CC) $(CFLAGS) $(CPPFLAGS) -o $@ $< $(LIB_STATIC) $(LDFLAGS) $(LDLIBS)
 
 $(CSV_EXAMPLE): examples/diag_csv_single.c $(LIB_STATIC)
+	$(CC) $(CFLAGS) $(CPPFLAGS) -o $@ $< $(LIB_STATIC) $(LDFLAGS) $(LDLIBS)
+
+$(CST_EXAMPLE): examples/diag_cst_single.c $(LIB_STATIC)
 	$(CC) $(CFLAGS) $(CPPFLAGS) -o $@ $< $(LIB_STATIC) $(LDFLAGS) $(LDLIBS)
 
 clean:
