@@ -53,73 +53,66 @@ static jsdk_status_t register_joint_pdos(jsdk_joint_t *joint)
     const jsdk_joint_profile_t *p = joint->profile;
     unsigned int i;
 
-    /* Register RxPDO entries */
+    /* 注册所有 PDO 条目到域。
+     * 【关键】padding(index==0x0000) 和 SDK 暂不识别的对象也必须调用
+     * ecrt_slave_config_reg_pdo_entry，否则后续条目的字节偏移会全体错位。 */
     for (i = 0; i < p->rx_entry_count; i++) {
         const ec_pdo_entry_info_t *e = &p->rx_entries[i];
-        unsigned int *off;
+        unsigned int bit_position = 0;
+        int ret = ecrt_slave_config_reg_pdo_entry(joint->sc,
+                e->index, e->subindex, joint->ctx->domain,
+                &bit_position);
 
-        if (e->index == 0x0000) continue; /* padding */
-        off = offset_for_object(joint, e->index, e->subindex);
-        if (!off) {
+        if (ret < 0) {
             jsdk_set_error(joint->ctx,
-                    "unrecognized RxPDO object 0x%04X:%u at pos %u",
-                    e->index, e->subindex, joint->position);
+                    "failed to register RxPDO entry 0x%04X:%u: %d",
+                    e->index, e->subindex, ret);
+            return JSDK_ERR_ECRT;
+        }
+        if (bit_position) {
+            jsdk_set_error(joint->ctx,
+                    "RxPDO entry 0x%04X:%u not byte-aligned (bit %u)",
+                    e->index, e->subindex, bit_position);
             return JSDK_ERR_UNSUPPORTED;
         }
 
-        {
-            unsigned int bit_position = 0;
-            int ret = ecrt_slave_config_reg_pdo_entry(joint->sc,
-                    e->index, e->subindex, joint->ctx->domain,
-                    &bit_position);
-            if (ret < 0) {
-                jsdk_set_error(joint->ctx,
-                        "failed to register RxPDO entry 0x%04X:%u: %d",
-                        e->index, e->subindex, ret);
-                return JSDK_ERR_ECRT;
+        /* padding(0x0000) 和不识别的对象：只占域位置，不存偏移 */
+        if (e->index != 0x0000) {
+            unsigned int *off = offset_for_object(joint, e->index,
+                    e->subindex);
+            if (off) {
+                *off = (unsigned int)ret;
             }
-            if (bit_position) {
-                jsdk_set_error(joint->ctx,
-                        "RxPDO entry 0x%04X:%u not byte-aligned (bit %u)",
-                        e->index, e->subindex, bit_position);
-                return JSDK_ERR_UNSUPPORTED;
-            }
-            *off = (unsigned int)ret;
+            /* 不认识的对象静默忽略；未来扩展对象词典后在此补映射 */
         }
     }
 
-    /* Register TxPDO entries */
     for (i = 0; i < p->tx_entry_count; i++) {
         const ec_pdo_entry_info_t *e = &p->tx_entries[i];
-        unsigned int *off;
+        unsigned int bit_position = 0;
+        int ret = ecrt_slave_config_reg_pdo_entry(joint->sc,
+                e->index, e->subindex, joint->ctx->domain,
+                &bit_position);
 
-        if (e->index == 0x0000) continue;
-        off = offset_for_object(joint, e->index, e->subindex);
-        if (!off) {
+        if (ret < 0) {
             jsdk_set_error(joint->ctx,
-                    "unrecognized TxPDO object 0x%04X:%u at pos %u",
-                    e->index, e->subindex, joint->position);
+                    "failed to register TxPDO entry 0x%04X:%u: %d",
+                    e->index, e->subindex, ret);
+            return JSDK_ERR_ECRT;
+        }
+        if (bit_position) {
+            jsdk_set_error(joint->ctx,
+                    "TxPDO entry 0x%04X:%u not byte-aligned (bit %u)",
+                    e->index, e->subindex, bit_position);
             return JSDK_ERR_UNSUPPORTED;
         }
 
-        {
-            unsigned int bit_position = 0;
-            int ret = ecrt_slave_config_reg_pdo_entry(joint->sc,
-                    e->index, e->subindex, joint->ctx->domain,
-                    &bit_position);
-            if (ret < 0) {
-                jsdk_set_error(joint->ctx,
-                        "failed to register TxPDO entry 0x%04X:%u: %d",
-                        e->index, e->subindex, ret);
-                return JSDK_ERR_ECRT;
+        if (e->index != 0x0000) {
+            unsigned int *off = offset_for_object(joint, e->index,
+                    e->subindex);
+            if (off) {
+                *off = (unsigned int)ret;
             }
-            if (bit_position) {
-                jsdk_set_error(joint->ctx,
-                        "TxPDO entry 0x%04X:%u not byte-aligned (bit %u)",
-                        e->index, e->subindex, bit_position);
-                return JSDK_ERR_UNSUPPORTED;
-            }
-            *off = (unsigned int)ret;
         }
     }
 
