@@ -15,6 +15,7 @@ DIAG_EXAMPLE = $(BUILD_DIR)/diag_csp_single
 CSV_EXAMPLE = $(BUILD_DIR)/diag_csv_single
 CST_EXAMPLE = $(BUILD_DIR)/diag_cst_single
 SDO_EXAMPLE = $(BUILD_DIR)/sdo_diag
+FAULT_EXAMPLE = $(BUILD_DIR)/fault_diag
 
 SDK_SRCS = \
 	src/transport.c \
@@ -23,15 +24,16 @@ SDK_SRCS = \
 	src/esi_parser.c
 SDK_OBJS = $(patsubst src/%.c,$(BUILD_DIR)/%.o,$(SDK_SRCS))
 
-.PHONY: all clean example diag csv cst sdo
+.PHONY: all clean example diag csv cst sdo fault
 
-all: $(LIB_STATIC) $(LIB_SHARED) example diag csv cst sdo
+all: $(LIB_STATIC) $(LIB_SHARED) example diag csv cst sdo fault
 
 example: $(EXAMPLE)
 diag: $(DIAG_EXAMPLE)
 csv: $(CSV_EXAMPLE)
 cst: $(CST_EXAMPLE)
 sdo: $(SDO_EXAMPLE)
+fault: $(FAULT_EXAMPLE)
 
 $(BUILD_DIR):
 	mkdir -p $(BUILD_DIR)
@@ -58,6 +60,9 @@ $(CST_EXAMPLE): examples/diag_cst_single.c $(LIB_STATIC)
 	$(CC) $(CFLAGS) $(CPPFLAGS) -o $@ $< $(LIB_STATIC) $(LDFLAGS) $(LDLIBS)
 
 $(SDO_EXAMPLE): examples/sdo_diag.c $(LIB_STATIC)
+	$(CC) $(CFLAGS) $(CPPFLAGS) -o $@ $< $(LIB_STATIC) $(LDFLAGS) $(LDLIBS)
+
+$(FAULT_EXAMPLE): examples/fault_diag.c $(LIB_STATIC)
 	$(CC) $(CFLAGS) $(CPPFLAGS) -o $@ $< $(LIB_STATIC) $(LDFLAGS) $(LDLIBS)
 
 clean:

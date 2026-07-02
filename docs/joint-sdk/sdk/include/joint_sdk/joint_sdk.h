@@ -115,6 +115,30 @@ int jsdk_joint_is_fault(jsdk_joint_t *joint);
 const char *jsdk_status_string(jsdk_status_t status);
 const char *jsdk_axis_state_string(jsdk_axis_state_t state);
 
+/* === 故障诊断 === */
+
+typedef struct {
+    int valid;               /* 1 = 已读取到有效故障信息 */
+    uint16_t code_603f;      /* CiA402 标准故障码 (0x603F) */
+    uint8_t  error_register; /* 错误寄存器 (0x1001) */
+    uint32_t vendor_lo;      /* 厂商故障码低 32 位 (0x203F) */
+    uint32_t vendor_hi;      /* 厂商故障码高 32 位 (0x203E) */
+} jsdk_fault_info_t;
+
+/* 故障回调类型。在 rt_safe 周期上下文中调用，禁止 sleep/malloc/加锁。 */
+typedef void (*jsdk_fault_callback_t)(jsdk_joint_t *joint,
+        const jsdk_fault_info_t *info, void *user_data);
+
+/* 注册故障回调。激活前或激活后均可调用。 */
+void jsdk_context_set_fault_callback(jsdk_context_t *ctx,
+        jsdk_fault_callback_t cb, void *user_data);
+
+/* 同步获取最近一次故障信息（rt_safe）。
+ * 返回 0 无故障，返回 1 有故障 (valid=1)。
+ * 无故障时 info 各字段均为 0。 */
+int jsdk_joint_get_fault_info(jsdk_joint_t *joint,
+        jsdk_fault_info_t *info);
+
 /* === 异步 SDO 读写（运行期，rt_safe，不阻塞周期） === */
 
 typedef int jsdk_sdo_handle_t;

@@ -147,6 +147,62 @@ static void read_joint_feedback(jsdk_joint_t *joint)
         joint->command.target_velocity = 0;
         joint->command.target_torque = 0;
     }
+
+    /* ---- 故障诊断自动 SDO 读取 ---- */
+    if (joint->feedback.statusword & JSDK_CIA402_SW_FAULT) {
+        /* 故障态：启动或继续 SDO 轮流读取 */
+        if (joint->fault_seq == 0) {
+            joint->fault_seq = 1;  /* 开始读 0x603F */
+            joint->fault_notified = 0;
+            memset(&joint->fault_info, 0, sizeof(joint->fault_info));
+        }
+
+        if (joint->fault_seq >= 1 && joint->fault_seq <= 4) {
+            ec_sdo_request_t *req = joint->sdo_reqs[joint->fault_seq - 1];
+            if (req) {
+                ec_request_state_t st = ecrt_sdo_request_state(req);
+                if (st == EC_REQUEST_UNUSED) {
+                    ecrt_sdo_request_read(req);
+                } else if (st == EC_REQUEST_SUCCESS || st == EC_REQUEST_ERROR) {
+                    /* 读取结果 */
+                    if (joint->fault_seq == 1 && st == EC_REQUEST_SUCCESS) {
+                        uint8_t *d = ecrt_sdo_request_data(req);
+                        joint->fault_info.code_603f =
+                            (uint16_t)(d[0] | (d[1] << 8));
+                    } else if (joint->fault_seq == 2 && st == EC_REQUEST_SUCCESS) {
+                        joint->fault_info.error_register =
+                            *ecrt_sdo_request_data(req);
+                    } else if (joint->fault_seq == 3 && st == EC_REQUEST_SUCCESS) {
+                        uint8_t *d = ecrt_sdo_request_data(req);
+                        joint->fault_info.vendor_lo =
+                            (uint32_t)(d[0] | (d[1] << 8) |
+                                    (d[2] << 16) | (d[3] << 24));
+                    } else if (joint->fault_seq == 4 && st == EC_REQUEST_SUCCESS) {
+                        uint8_t *d = ecrt_sdo_request_data(req);
+                        joint->fault_info.vendor_hi =
+                            (uint32_t)(d[0] | (d[1] << 8) |
+                                    (d[2] << 16) | (d[3] << 24));
+                    }
+                    joint->fault_seq++;
+
+                    if (joint->fault_seq > 4) {
+                        joint->fault_info.valid = 1;
+                        /* 触发回调 */
+                        if (joint->ctx->fault_cb && !joint->fault_notified) {
+                            joint->ctx->fault_cb(joint,
+                                    &joint->fault_info,
+                                    joint->ctx->fault_cb_data);
+                            joint->fault_notified = 1;
+                        }
+                    }
+                }
+            }
+        }
+    } else {
+        /* 无故障：复位序列 */
+        joint->fault_seq = 0;
+        joint->fault_notified = 0;
+    }
 }
 
 static void write_joint_command(jsdk_joint_t *joint)
@@ -407,6 +463,20 @@ jsdk_status_t jsdk_context_configure(jsdk_context_t *ctx)
         if (ret != JSDK_OK) {
             return ret;
         }
+
+        /* 预创建故障诊断 SDO (handle 0-3) */
+        joint->sdo_reqs[0] = ecrt_slave_config_create_sdo_request(
+                joint->sc, 0x603F, 0, 2);
+        joint->sdo_reqs[1] = ecrt_slave_config_create_sdo_request(
+                joint->sc, 0x1001, 0, 1);
+        joint->sdo_reqs[2] = ecrt_slave_config_create_sdo_request(
+                joint->sc, 0x203F, 0, 4);
+        joint->sdo_reqs[3] = ecrt_slave_config_create_sdo_request(
+                joint->sc, 0x203E, 0, 4);
+        joint->sdo_req_count = 4;
+        joint->fault_seq = 0;
+        joint->fault_notified = 0;
+        memset(&joint->fault_info, 0, sizeof(joint->fault_info));
 
         if (ctx->config.auto_reference_clock && i == 0) {
             ret = ecrt_master_select_reference_clock(ctx->master, joint->sc);
@@ -706,4 +776,24 @@ int jsdk_joint_sdo_write(jsdk_joint_t *joint, jsdk_sdo_handle_t handle)
     ec_sdo_request_t *req = sdo_get_req(joint, handle);
     if (!req) return -1;
     return ecrt_sdo_request_write(req);
+}
+
+/* ================================================================
+ * 故障诊断
+ * ================================================================ */
+
+void jsdk_context_set_fault_callback(jsdk_context_t *ctx,
+        jsdk_fault_callback_t cb, void *user_data)
+{
+    if (!ctx) return;
+    ctx->fault_cb = cb;
+    ctx->fault_cb_data = user_data;
+}
+
+int jsdk_joint_get_fault_info(jsdk_joint_t *joint,
+        jsdk_fault_info_t *info)
+{
+    if (!joint || !info) return 0;
+    *info = joint->fault_info;
+    return joint->fault_info.valid;
 }

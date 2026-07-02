@@ -78,10 +78,16 @@ struct jsdk_joint {
     jsdk_joint_command_t command;
     jsdk_joint_feedback_t feedback;
 
-    /* 异步 SDO 请求池。索引 0 保留给故障码自动读取。 */
-#define JSDK_MAX_SDO_REQUESTS 8
+    /* 异步 SDO 请求池。索引 0 保留给故障码自动读取。
+     * 0: 0x603F, 1: 0x1001, 2: 0x203F, 3: 0x203E */
+#define JSDK_MAX_SDO_REQUESTS 12
     ec_sdo_request_t *sdo_reqs[JSDK_MAX_SDO_REQUESTS];
     unsigned int sdo_req_count;
+
+    /* 故障诊断 */
+    jsdk_fault_info_t fault_info;
+    int fault_seq;             /* 0=idle, 1-4=reading 603F/1001/203F/203E */
+    int fault_notified;        /* 1 = 回调已触发 (每个故障周期只触一次) */
 };
 
 struct jsdk_context {
@@ -98,6 +104,10 @@ struct jsdk_context {
     int configured;
     int activated;
     char last_error[256];
+
+    /* 故障回调 */
+    jsdk_fault_callback_t fault_cb;
+    void *fault_cb_data;
 };
 
 const jsdk_joint_profile_t *jsdk_profile_find(const char *name);
