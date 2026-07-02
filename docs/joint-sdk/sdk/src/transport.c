@@ -372,6 +372,7 @@ jsdk_status_t jsdk_context_add_joint(jsdk_context_t *ctx,
     joint->alias = config->alias;
     joint->position = config->position;
     jsdk_cia402_init(&joint->cia402, profile->mode_csp);
+    jsdk_unit_scale_default(&joint->scale, 10000);
 
     ctx->joints[ctx->joint_count++] = joint;
     if (joint_out) {
@@ -796,4 +797,117 @@ int jsdk_joint_get_fault_info(jsdk_joint_t *joint,
     if (!joint || !info) return 0;
     *info = joint->fault_info;
     return joint->fault_info.valid;
+}
+
+/* ================================================================
+ * 单位换算
+ * ================================================================ */
+
+#define JSDK_PI 3.14159265358979323846
+
+void jsdk_unit_scale_default(jsdk_unit_scale_t *scale, uint32_t rated_trq)
+{
+    if (!scale) return;
+    /* 默认参数：编码器 16384 counts/rev，齿轮比 8:1，输出轴 131072 counts/rev */
+    jsdk_unit_scale_calc(scale, 16384, 8, 1, rated_trq ? rated_trq : 10000);
+}
+
+void jsdk_unit_scale_calc(jsdk_unit_scale_t *scale,
+        uint32_t encoder_resolution,
+        uint32_t motor_rev, uint32_t shaft_rev,
+        uint32_t rated_torque)
+{
+    if (!scale) return;
+    if (!encoder_resolution || !motor_rev) {
+        memset(scale, 0, sizeof(*scale));
+        return;
+    }
+
+    /* 输出轴 counts/rev = encoder_resolution * motor_rev / shaft_rev */
+    double shaft_counts_per_rev = (double)encoder_resolution
+            * (double)motor_rev / (double)(shaft_rev ? shaft_rev : 1);
+
+    scale->pos_counts_to_rad   = 2.0 * JSDK_PI / shaft_counts_per_rev;
+    scale->vel_counts_to_rad_s = 2.0 * JSDK_PI / shaft_counts_per_rev;
+
+    /* 转矩：1 单位 = 0.1% 额定转矩 → N·m = unit * rated_torque / 1000000 */
+    scale->trq_to_Nm = rated_torque ? ((double)rated_torque / 1000000.0) : 0.01;
+    scale->valid = 1;
+}
+
+void jsdk_joint_set_scale(jsdk_joint_t *joint,
+        const jsdk_unit_scale_t *scale)
+{
+    if (joint && scale) joint->scale = *scale;
+}
+
+void jsdk_joint_get_scale(jsdk_joint_t *joint,
+        jsdk_unit_scale_t *scale)
+{
+    if (joint && scale) *scale = joint->scale;
+}
+
+/* --- 位置累计展开（16→32 bit 回绕修正） --- */
+
+static void pos_unwrap(jsdk_joint_t *joint, int32_t raw)
+{
+    if (!joint->pos_accum_valid) {
+        joint->pos_accumulator = (int64_t)raw;
+        joint->last_raw_position = raw;
+        joint->pos_accum_valid = 1;
+        return;
+    }
+
+    {
+        uint16_t cur  = (uint16_t)(raw & 0xFFFF);
+        uint16_t prev = (uint16_t)(joint->last_raw_position & 0xFFFF);
+        int16_t  diff = (int16_t)(cur - prev);
+        joint->pos_accumulator += diff;
+        joint->last_raw_position = raw;
+    }
+}
+
+/* --- 物理量 getter（rt_safe） --- */
+
+double jsdk_joint_actual_position_rad(jsdk_joint_t *joint)
+{
+    if (!joint || !joint->scale.valid) return 0.0;
+    pos_unwrap(joint, joint->feedback.actual_position);
+    return (double)joint->pos_accumulator * joint->scale.pos_counts_to_rad;
+}
+
+double jsdk_joint_actual_velocity_rad_s(jsdk_joint_t *joint)
+{
+    if (!joint || !joint->scale.valid) return 0.0;
+    return (double)joint->feedback.actual_velocity
+            * joint->scale.vel_counts_to_rad_s;
+}
+
+double jsdk_joint_actual_torque_Nm(jsdk_joint_t *joint)
+{
+    if (!joint || !joint->scale.valid) return 0.0;
+    return (double)joint->feedback.actual_torque * joint->scale.trq_to_Nm;
+}
+
+/* --- 物理量 setter（rt_safe） --- */
+
+void jsdk_joint_set_target_position_rad(jsdk_joint_t *joint, double rad)
+{
+    if (!joint || !joint->scale.valid) return;
+    int32_t counts = (int32_t)(rad / joint->scale.pos_counts_to_rad);
+    jsdk_joint_set_target_position(joint, counts);
+}
+
+void jsdk_joint_set_target_velocity_rad_s(jsdk_joint_t *joint, double rad_s)
+{
+    if (!joint || !joint->scale.valid) return;
+    int32_t counts = (int32_t)(rad_s / joint->scale.vel_counts_to_rad_s);
+    jsdk_joint_set_target_velocity(joint, counts);
+}
+
+void jsdk_joint_set_target_torque_Nm(jsdk_joint_t *joint, double Nm)
+{
+    if (!joint || !joint->scale.valid) return;
+    int16_t units = (int16_t)(Nm / joint->scale.trq_to_Nm);
+    jsdk_joint_set_target_torque(joint, units);
 }

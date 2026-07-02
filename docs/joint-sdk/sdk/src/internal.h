@@ -88,6 +88,12 @@ struct jsdk_joint {
     jsdk_fault_info_t fault_info;
     int fault_seq;             /* 0=idle, 1-4=reading 603F/1001/203F/203E */
     int fault_notified;        /* 1 = 回调已触发 (每个故障周期只触一次) */
+
+    /* 单位换算 */
+    jsdk_unit_scale_t scale;
+    int64_t pos_accumulator;   /* 累计位置 (指令单位) 用于 16→32bit 展开 */
+    int32_t last_raw_position; /* 上周期原始位置值 */
+    int pos_accum_valid;       /* 1 = 累计器已初始化 */
 };
 
 struct jsdk_context {

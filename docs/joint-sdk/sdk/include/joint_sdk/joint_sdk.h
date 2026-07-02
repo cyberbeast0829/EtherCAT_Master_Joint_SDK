@@ -115,6 +115,41 @@ int jsdk_joint_is_fault(jsdk_joint_t *joint);
 const char *jsdk_status_string(jsdk_status_t status);
 const char *jsdk_axis_state_string(jsdk_axis_state_t state);
 
+/* === 单位换算（指令单位 ↔ 物理量） === */
+
+typedef struct {
+    double pos_counts_to_rad;    /* 1 指令单位 = N rad (输出轴) */
+    double vel_counts_to_rad_s;  /* 1 指令单位/s = N rad/s (输出轴) */
+    double trq_to_Nm;            /* 1 转矩单位 = N N·m */
+    int valid;                   /* 1 = 系数已计算 */
+} jsdk_unit_scale_t;
+
+/* 用默认参数初始化（encoder=16384, gear=8:1, rated_trq=10 N·m） */
+void jsdk_unit_scale_default(jsdk_unit_scale_t *scale, uint32_t rated_trq);
+
+/* 根据 ESI 参数精确计算换算系数 */
+void jsdk_unit_scale_calc(jsdk_unit_scale_t *scale,
+        uint32_t encoder_resolution,   /* 0x608F:1 */
+        uint32_t motor_rev,            /* 0x6091:1 */
+        uint32_t shaft_rev,            /* 0x6091:2 */
+        uint32_t rated_torque);        /* 0x6076 */
+
+/* 设置/获取 joint 的换算系数。激活前或激活后均可调用。 */
+void jsdk_joint_set_scale(jsdk_joint_t *joint,
+        const jsdk_unit_scale_t *scale);
+void jsdk_joint_get_scale(jsdk_joint_t *joint,
+        jsdk_unit_scale_t *scale);
+
+/* 物理量接口（rt_safe，内部自动完成单位换算和位置展开）。
+ * 可与指令单位接口混用，在同一 cycle 内先后调用任意一种均可。 */
+void jsdk_joint_set_target_position_rad(jsdk_joint_t *joint, double rad);
+void jsdk_joint_set_target_velocity_rad_s(jsdk_joint_t *joint, double rad_s);
+void jsdk_joint_set_target_torque_Nm(jsdk_joint_t *joint, double Nm);
+
+double jsdk_joint_actual_position_rad(jsdk_joint_t *joint);
+double jsdk_joint_actual_velocity_rad_s(jsdk_joint_t *joint);
+double jsdk_joint_actual_torque_Nm(jsdk_joint_t *joint);
+
 /* === 故障诊断 === */
 
 typedef struct {
