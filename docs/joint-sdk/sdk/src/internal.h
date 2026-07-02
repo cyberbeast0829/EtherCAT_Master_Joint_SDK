@@ -77,6 +77,11 @@ struct jsdk_joint {
     jsdk_cia402_axis_t cia402;
     jsdk_joint_command_t command;
     jsdk_joint_feedback_t feedback;
+
+    /* 异步 SDO 请求池。索引 0 保留给故障码自动读取。 */
+#define JSDK_MAX_SDO_REQUESTS 8
+    ec_sdo_request_t *sdo_reqs[JSDK_MAX_SDO_REQUESTS];
+    unsigned int sdo_req_count;
 };
 
 struct jsdk_context {

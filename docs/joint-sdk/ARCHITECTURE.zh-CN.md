@@ -1,7 +1,7 @@
 # 机器人关节 EtherCAT SDK — 架构设计文档
 
-> 版本：v0.2（L1/L2/L3 初版实现）
-> 状态：PoC 已在目标 IgH 主站环境初步验证；正式 SDK 的 L1/L2/L3 模块已实现；L4 外观层、多轴示例、异步 SDO 诊断仍待完善。
+> 版本：v0.3（三模式 CSP/CSV/CST 联调通过，ESI 动态加载可用）
+> 状态：CSP/CSV/CST 三模式在目标 IgH 主站环境基本验证成功；PDO 映射偏移 bug 已修复；ESI XML 动态解析器已实现；下一阶段重点为异步 SDO 参数/诊断、单位换算、多轴同步。
 > 基础平台：IgH EtherCAT Master（用户空间 `libethercat.so` / `ecrt_*` API）
 > 目标：为客户提供一套可集成进其 EtherCAT 主站系统的 SDK，快速、安全地通过 CiA402 协议与本公司机器人关节交互。
 
@@ -12,7 +12,7 @@
 本文档定义 SDK 的整体架构、分层职责、实时模型、配置数据模型与交付方式，并记录当前已落地的 PoC 与 L1/L2/L3 SDK 实现状态。
 
 - **读者**：SDK 研发人员（内部）、集成客户的系统架构师（外部摘要版）。
-- **范围**：架构与接口契约设计、守护兽关节设备 profile、当前实现状态与后续路线。单位换算公式、异步 SDO 诊断、多轴示例仍需后续补齐。
+- **范围**：架构与接口契约设计、守护兽关节设备 profile、当前实现状态与后续路线。CSP/CSV/CST 三模式已通过实物验证；ESI XML 动态加载已可用；异步 SDO、单位换算、多轴示例、L4 C++ 外观层为下一阶段重点。
 
 ---
 
@@ -236,30 +236,36 @@ profile 是 SDK 与具体关节型号之间的契约，至少包含：
 
 ```
 docs/joint-sdk/sdk/
-├── Makefile                 # 构建 libjointsdk.a / libjointsdk.so / 示例
+├── Makefile                 # 构建 libjointsdk.a / libjointsdk.so / 全部示例
 ├── include/joint_sdk/
 │   ├── joint_sdk.h          # C ABI（已实现）
 │   └── cia402.h             # DS402 常量 / 状态定义（已实现）
 ├── src/
-│   ├── transport.c          # L1: ecrt_* 封装, domain, DC, 周期边界
-│   ├── profile_cyberbeast_joint_module.c # L2: 守护兽通用关节 profile
+│   ├── transport.c          # L1: ecrt_* 封装, domain, DC, 周期边界, ESI 加载
+│   ├── esi_parser.h         # ESI XML 解析器内部头文件
+│   ├── esi_parser.c         # 零依赖 ESI XML 解析器（方案 B）
+│   ├── profile_cyberbeast_joint_module.c # L2: 守护兽静态 profile（向后兼容）
 │   ├── cia402.c             # L3: DS402 状态机
 │   └── internal.h           # SDK 内部结构
 └── examples/
-    └── csp_single_sdk.c     # 基于正式 SDK 的单轴 CSP 示例
+    ├── csp_single_sdk.c     # 内置 profile 单轴 CSP 示例
+    ├── diag_csp_single.c    # CSP 诊断（--hold 静止, --nosine 直流, ESI 加载）
+    ├── diag_csv_single.c    # CSV 诊断（--hold 静止）
+    └── diag_cst_single.c    # CST 诊断（--hold 静止）
 ```
 
-旧 PoC 仍保留在 [docs/joint-sdk/poc/csp_single.c](poc/csp_single.c)，用于和 SDK 示例交叉对照。
+旧 PoC 仍保留在 [docs/joint-sdk/poc/csp_single.c](poc/csp_single.c)。
 
 ---
 
 ## 10. 分阶段实施路线
 
-1. **已完成：PoC**。基于 [examples/user/main.c](../../examples/user/main.c) 与 [docs/joint-sdk/poc/csp_single.c](poc/csp_single.c)，单轴 CSP 已在目标 IgH 主站环境初步验证成功。
-2. **已完成：L1/L2/L3 初版 SDK**。L1 传输层、L2 守护兽 profile、L3 DS402 状态机已拆分到 [docs/joint-sdk/sdk](sdk)。
-3. **进行中：SDK 示例联调**。使用 [docs/joint-sdk/sdk/examples/csp_single_sdk.c](sdk/examples/csp_single_sdk.c) 替代旧 PoC，验证拆分后的 SDK 链路与原 PoC 行为一致。
-4. **下一阶段：多轴与三模式扩展**。补多轴 CSP 示例、CSV 示例、CST 示例，验证 1~10 轴 DC 同步与 WKC/AL 状态监测。
-5. **后续扩展**：异步 SDO 参数/诊断、详细故障码读取、单位换算、L4 C++ 外观、自带 RT 线程封装、打包交付与集成文档。
+1. **✅ 已完成：PoC**。基于 [examples/user/main.c](../../examples/user/main.c) 与 [docs/joint-sdk/poc/csp_single.c](poc/csp_single.c)，单轴 CSP 已在目标 IgH 主站环境验证成功。
+2. **✅ 已完成：L1/L2/L3 初版 SDK**。L1 传输层、L2 守护兽 profile + ESI 动态加载、L3 DS402 状态机已拆分到 [docs/joint-sdk/sdk](sdk)。
+3. **✅ 已完成：CSP/CSV/CST 三模式联调**。使用诊断示例（`diag_csp_single` / `diag_csv_single` / `diag_cst_single`）验证三模式链路通；修复了 PDO padding 条目偏移 bug。
+4. **🔧 下一阶段：异步 SDO + 故障诊断闭环 + 单位换算**。这是从"能控制"到"能交付"的关键缺口。
+5. **待实现：多轴同步示例 + L4 C++ 外观层**。多轴 domain 布局验证、`JointGroup`/`Joint` C++ 封装。
+6. **待实现：集成文档 + 打包**。`make install`、pkg-config、客户集成指南。
 
 ---
 
@@ -396,27 +402,68 @@ TPDO（从站→主站，输入）三选一，经 0x1C13:01 选择：
 
 | 模块/能力 | 状态 | 说明 |
 |-----------|------|------|
-| PoC 单轴 CSP | **已完成初步实物验证** | 旧 PoC 位于 [docs/joint-sdk/poc/csp_single.c](poc/csp_single.c)，已在已安装 IgH master、网卡已绑定的目标环境中初步验证成功。 |
-| 公共 C ABI | **已实现初版** | 头文件位于 [docs/joint-sdk/sdk/include/joint_sdk/joint_sdk.h](sdk/include/joint_sdk/joint_sdk.h)，提供 context、joint、周期 begin/end、命令、反馈、状态查询接口。 |
-| L1 传输层 | **已实现初版** | [docs/joint-sdk/sdk/src/transport.c](sdk/src/transport.c) 封装 master/domain/slave config/PDO/DC/周期收发。 |
-| L2 设备 profile | **已实现初版** | [docs/joint-sdk/sdk/src/profile_cyberbeast_joint_module.c](sdk/src/profile_cyberbeast_joint_module.c) 固化 CyberBeast Joint Module 的 vendor/product、PDO、DC、模式编码。 |
-| L3 CiA402 状态机 | **已实现初版** | [docs/joint-sdk/sdk/src/cia402.c](sdk/src/cia402.c) 实现 enable/disable/fault reset 与状态解析。 |
-| SDK 单轴 CSP 示例 | **已实现，待目标机联调** | [docs/joint-sdk/sdk/examples/csp_single_sdk.c](sdk/examples/csp_single_sdk.c) 使用正式 SDK 替代旧 PoC。 |
-| 构建脚本 | **已实现** | [docs/joint-sdk/sdk/Makefile](sdk/Makefile) 构建 `libjointsdk.a`、`libjointsdk.so` 和 `csp_single_sdk`。 |
-| 多轴示例 | **待实现** | 计划先 2 轴 CSP，再扩到 1~10 轴。 |
-| CSV/CST 示例 | **待实现** | 复用全功能 PDO，运行时切 0x6060。 |
-| 异步 SDO 诊断 | **待实现** | 目标对象：0x603F、0x1001、0x203F、0x203E 及参数调节对象。 |
-| 单位换算 | **待协议补充后实现** | 等待《CANOpen 补充手册》的位置/速度/力矩转换公式。 |
-| L4 C++ 外观层 / 自带 RT 线程 | **待实现** | 当前核心 SDK 采用嵌入客户实时循环的 C ABI。 |
+| PoC 单轴 CSP | **✅ 已验证** | 旧 PoC 位于 [docs/joint-sdk/poc/csp_single.c](poc/csp_single.c)，已在目标 IgH 环境验证成功。 |
+| 公共 C ABI | **✅ 已实现** | 头文件位于 [sdk/include/joint_sdk/joint_sdk.h](sdk/include/joint_sdk/joint_sdk.h)，提供 context、joint、周期 begin/end、命令、反馈、状态查询。 |
+| L1 传输层 | **✅ 已实现** | [sdk/src/transport.c](sdk/src/transport.c) 封装 master/domain/slave config/PDO/DC/周期收发。已修复 PDO padding 条目偏移 bug。 |
+| L2 设备 profile | **✅ 已实现** | [sdk/src/profile_cyberbeast_joint_module.c](sdk/src/profile_cyberbeast_joint_module.c) 内置静态 profile；同时支持 ESI XML 动态加载。 |
+| L2 ESI XML 解析器 | **✅ 已实现** | [sdk/src/esi_parser.c](sdk/src/esi_parser.c) 零依赖 XML 解析，自动提取 vendor/product/PDO/SM/DC 构建 profile。支持 30+ 型号免重编译适配。 |
+| L3 CiA402 状态机 | **✅ 已实现** | [sdk/src/cia402.c](sdk/src/cia402.c) 实现 enable/disable/fault reset 与状态解析。 |
+| 单轴 CSP 示例 | **✅ 已验证** | [sdk/examples/csp_single_sdk.c](sdk/examples/csp_single_sdk.c) 内置 profile 路径。 |
+| 诊断示例 CSP | **✅ 已验证** | [sdk/examples/diag_csp_single.c](sdk/examples/diag_csp_single.c) 支持 `--hold` 静止模式、正弦轨迹、ESI 动态加载。 |
+| 诊断示例 CSV | **✅ 已验证** | [sdk/examples/diag_csv_single.c](sdk/examples/diag_csv_single.c) 周期同步速度，支持 `--hold`。 |
+| 诊断示例 CST | **✅ 已验证** | [sdk/examples/diag_cst_single.c](sdk/examples/diag_cst_single.c) 周期同步力矩，支持 `--hold`。 |
+| 构建脚本 | **✅ 已实现** | [sdk/Makefile](sdk/Makefile) 构建 `libjointsdk.a/.so` 和全部示例目标。 |
+| **异步 SDO 读写** | **🔧 下一阶段** | 运行期参数读写（PID 增益/限值等），基于 IgH `ecrt_sdo_request_*`，RT 安全。 |
+| **故障诊断闭环** | **🔧 下一阶段** | 读取 0x603F/0x1001/0x203E/0x203F，提供 `on_fault` 回调。依赖异步 SDO。 |
+| **单位换算** | **🔧 下一阶段** | 指令单位 ↔ rad/rad·s⁻¹/N·m，位置展开（16→32 bit 回绕修正）。待《CANOpen 补充手册》公式。 |
+| **多轴同步示例** | **🔧 下一阶段** | 先 2 轴 CSP，再扩到 1~10 轴，验证 domain 布局、DC 参考时钟、单轴故障隔离。 |
+| **L4 C++ 外观层 / 自带 RT 线程** | **🔧 下一阶段** | `JointGroup` / `Joint` 类封装，RAII 生命周期，回调式 RT 线程（形态 A）。 |
+| 集成文档与打包 | **🔧 下一阶段** | `make install`、pkg-config、集成指南、API 参考。 |
 
 ---
 
 ## 14. 下一步
 
-1. **在目标 Linux/IgH 环境编译并运行 SDK 示例**：`cd docs/joint-sdk/sdk && make ETHERLAB_DIR=/opt/etherlab && sudo ./build/csp_single_sdk`。目标是确认正式 SDK 拆分后仍能进入 `operation_enabled` 并执行小幅 CSP 轨迹。
-2. **若遇到 profile 名称不匹配错误，先 clean rebuild**：`make clean && make ETHERLAB_DIR=/opt/etherlab`。`JSDK_PROFILE_CYBERBEAST_JOINT_MODULE` 是推荐名称；`FL90BLW14` 仅作为旧 ESI/旧示例兼容别名保留。
-3. **记录 SDK 示例联调结果**：对比旧 PoC 与 SDK 示例的 `statusword`、`mode_display`、`actual_position`、WKC、AL state；若行为一致，标记 L1/L2/L3 初版闭环完成。
-4. **补多轴支持验证**：先做 2 轴 CSP，再扩到典型 1~10 轴，确认 domain 偏移、DC 参考时钟、WKC、同步错误恢复逻辑。
-5. **补 CSV/CST 示例**：复用 0x1600/0x1A00 全功能 PDO，运行时切 0x6060，分别验证 `target_velocity` 和 `target_torque`。
-6. **补异步 SDO 诊断**：读取 0x603F、0x1001、0x203F、0x203E；实现非 RT 服务线程或轮询式请求接口。
-7. **补单位换算与 L4 外观层**：根据《CANOpen 补充手册》实现指令单位 ↔ rad/rad/s/N·m，再封装 C++ `JointGroup` / `Joint`。
+### 第一梯队：让 SDK "能交付"（本周）
+
+1. **异步 SDO 读写接口**
+   - 基于 IgH `ecrt_slave_config_create_sdo_request` + `ecrt_sdo_request_read/write/state` 封装 rt_safe 非阻塞 SDO 通道。
+   - 公开 API：`jsdk_joint_sdo_create()` / `jsdk_joint_sdo_read()` / `jsdk_joint_sdo_write()` / `jsdk_joint_sdo_state()`。
+   - 用途：运行期调整 PID 增益（0x2008）、切换限值（0x6072/0x6073/0x6080）、读写软限位（0x607D）。
+
+2. **故障诊断闭环**
+   - 依赖异步 SDO，在 Statusword bit3=1 时自动读取 0x603F（CiA402 故障码）、0x1001（错误寄存器）、0x203E/0x203F（厂商详细故障码）。
+   - 提供 `on_fault(axis, error_register, code_603f, vendor_lo, vendor_hi)` 回调，客户可注册自己的故障处理逻辑。
+   - 提供 `jsdk_joint_get_fault_code()` 同步查询接口。
+
+3. **单位换算层**
+   - 基于 0x608F（编码器分辨率）和 0x6091（齿轮比）实现指令单位 ↔ 物理量的双向转换。
+   - 位置：计数 → rad（同时修正 16→32 bit 回绕问题）。
+   - 速度：计数/s → rad/s。
+   - 力矩：0.1% 额定转矩 → N·m（基于 0x6076 额定转矩）。
+   - 提供双套 API：`jsdk_joint_set_target_position()`（指令单位，RT 友好）和 `jsdk_joint_set_target_position_rad()`（物理量，含浮点运算）。
+
+### 第二梯队：让 SDK "好用"（下周）
+
+4. **多轴同步示例**
+   - `multi_axis_csp`：配置 N 个 joint 到同一 domain，验证 PDO 偏移、DC 参考时钟、WKC 监测。
+   - 测试单轴故障（断线/掉电）对其他轴的影响和恢复流程。
+
+5. **L4 C++ 外观层（JointGroup / Joint）**
+   - RAII 生命周期管理（`JointGroup` 构造即配置、析构即释放）。
+   - 语义化 API：`joint.enable(Mode::CSP)` / `joint.setTargetPosition(q)`。
+   - 形态 A：内置 RT 线程 + `std::function` 回调。
+   - C++ 头文件仅依赖 C ABI 的 `joint_sdk.h`，零额外编译依赖。
+
+### 第三梯队：让 SDK "可分发"（两周内）
+
+6. **集成文档**
+   - 依赖安装（IgH 版本、内核要求）。
+   - ESI XML 文件放置约定。
+   - 最小示例（CSP/CSV/CST 各一个 ≤30 行）。
+   - API 参考与故障排障清单。
+
+7. **打包与版本化**
+   - `make install` 目标（`libjointsdk.so` → `/usr/local/lib`，头文件 → `/usr/local/include/joint_sdk`）。
+   - pkg-config（`joint-sdk.pc`）。
+   - 语义版本号 `MAJOR.MINOR.PATCH`，与 IgH `EC_IOCTL_VERSION_MAGIC` 兼容性校验。

@@ -115,6 +115,43 @@ int jsdk_joint_is_fault(jsdk_joint_t *joint);
 const char *jsdk_status_string(jsdk_status_t status);
 const char *jsdk_axis_state_string(jsdk_axis_state_t state);
 
+/* === 异步 SDO 读写（运行期，rt_safe，不阻塞周期） === */
+
+typedef int jsdk_sdo_handle_t;
+
+typedef enum {
+    JSDK_SDO_IDLE = 0,     /* 空闲，可发起新请求 */
+    JSDK_SDO_BUSY,          /* 正在处理中 */
+    JSDK_SDO_SUCCESS,       /* 上次请求成功 */
+    JSDK_SDO_ERROR          /* 上次请求失败 */
+} jsdk_sdo_state_t;
+
+/* 创建异步 SDO 请求句柄（激活前调用，idle/blocking）。
+ *   index/subindex  目标 CoE 对象
+ *   size            预留数据缓冲区大小（需 ≥ 对象的实际字节数）
+ * 返回 >=0 的句柄，失败返回 -1。 */
+jsdk_sdo_handle_t jsdk_joint_sdo_create(jsdk_joint_t *joint,
+        uint16_t index, uint8_t subindex, size_t size);
+
+/* 查询 SDO 请求当前状态（rt_safe）。 */
+jsdk_sdo_state_t jsdk_joint_sdo_state(jsdk_joint_t *joint,
+        jsdk_sdo_handle_t handle);
+
+/* 获取 SDO 数据缓冲区指针（rt_safe）。
+ * 写入前：在此缓冲区填充数据，再调用 jsdk_joint_sdo_write()。
+ * 读取后：状态为 SUCCESS 时从此缓冲区取数据。 */
+uint8_t *jsdk_joint_sdo_data(jsdk_joint_t *joint,
+        jsdk_sdo_handle_t handle);
+
+/* 获取上次读取的实际数据大小（rt_safe）。 */
+size_t jsdk_joint_sdo_data_size(jsdk_joint_t *joint,
+        jsdk_sdo_handle_t handle);
+
+/* 调度异步 SDO 读/写操作（rt_safe）。仅在状态非 BUSY 时可调用。
+ * 返回 0 成功，<0 失败（如缓冲区不足）。 */
+int jsdk_joint_sdo_read(jsdk_joint_t *joint, jsdk_sdo_handle_t handle);
+int jsdk_joint_sdo_write(jsdk_joint_t *joint, jsdk_sdo_handle_t handle);
+
 /* === ESI XML 动态加载 === */
 
 /* 从 ESI XML 文件加载关节 profile。

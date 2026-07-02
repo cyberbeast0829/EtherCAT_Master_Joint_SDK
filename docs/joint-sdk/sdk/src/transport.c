@@ -635,3 +635,75 @@ const char *jsdk_status_string(jsdk_status_t status)
         return "unknown";
     }
 }
+
+/* ================================================================
+ * 异步 SDO 读写接口
+ * ================================================================ */
+
+jsdk_sdo_handle_t jsdk_joint_sdo_create(jsdk_joint_t *joint,
+        uint16_t index, uint8_t subindex, size_t size)
+{
+    ec_sdo_request_t *req;
+
+    if (!joint || !joint->sc || !size) return -1;
+    if (joint->sdo_req_count >= JSDK_MAX_SDO_REQUESTS) return -1;
+
+    req = ecrt_slave_config_create_sdo_request(joint->sc, index,
+            subindex, size);
+    if (!req) return -1;
+
+    joint->sdo_reqs[joint->sdo_req_count] = req;
+    return (jsdk_sdo_handle_t)(joint->sdo_req_count++);
+}
+
+static ec_sdo_request_t *sdo_get_req(jsdk_joint_t *joint,
+        jsdk_sdo_handle_t handle)
+{
+    if (!joint || handle < 0 ||
+            (unsigned int)handle >= joint->sdo_req_count)
+        return NULL;
+    return joint->sdo_reqs[handle];
+}
+
+jsdk_sdo_state_t jsdk_joint_sdo_state(jsdk_joint_t *joint,
+        jsdk_sdo_handle_t handle)
+{
+    ec_sdo_request_t *req = sdo_get_req(joint, handle);
+    if (!req) return JSDK_SDO_ERROR;
+
+    switch (ecrt_sdo_request_state(req)) {
+    case EC_REQUEST_UNUSED:   return JSDK_SDO_IDLE;
+    case EC_REQUEST_BUSY:     return JSDK_SDO_BUSY;
+    case EC_REQUEST_SUCCESS:  return JSDK_SDO_SUCCESS;
+    case EC_REQUEST_ERROR:    return JSDK_SDO_ERROR;
+    default:                  return JSDK_SDO_ERROR;
+    }
+}
+
+uint8_t *jsdk_joint_sdo_data(jsdk_joint_t *joint,
+        jsdk_sdo_handle_t handle)
+{
+    ec_sdo_request_t *req = sdo_get_req(joint, handle);
+    return req ? ecrt_sdo_request_data(req) : NULL;
+}
+
+size_t jsdk_joint_sdo_data_size(jsdk_joint_t *joint,
+        jsdk_sdo_handle_t handle)
+{
+    ec_sdo_request_t *req = sdo_get_req(joint, handle);
+    return req ? ecrt_sdo_request_data_size(req) : 0;
+}
+
+int jsdk_joint_sdo_read(jsdk_joint_t *joint, jsdk_sdo_handle_t handle)
+{
+    ec_sdo_request_t *req = sdo_get_req(joint, handle);
+    if (!req) return -1;
+    return ecrt_sdo_request_read(req);
+}
+
+int jsdk_joint_sdo_write(jsdk_joint_t *joint, jsdk_sdo_handle_t handle)
+{
+    ec_sdo_request_t *req = sdo_get_req(joint, handle);
+    if (!req) return -1;
+    return ecrt_sdo_request_write(req);
+}
