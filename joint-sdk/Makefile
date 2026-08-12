@@ -17,6 +17,7 @@ CST_EXAMPLE = $(BUILD_DIR)/diag_cst_single
 SDO_EXAMPLE = $(BUILD_DIR)/sdo_diag
 FAULT_EXAMPLE = $(BUILD_DIR)/fault_diag
 PHYS_EXAMPLE = $(BUILD_DIR)/phys_csp_single
+MULTI_EXAMPLE = $(BUILD_DIR)/multi_axis_csp
 
 SDK_SRCS = \
 	src/transport.c \
@@ -25,9 +26,9 @@ SDK_SRCS = \
 	src/esi_parser.c
 SDK_OBJS = $(patsubst src/%.c,$(BUILD_DIR)/%.o,$(SDK_SRCS))
 
-.PHONY: all clean example diag csv cst sdo fault phys
+.PHONY: all clean example diag csv cst sdo fault phys multi
 
-all: $(LIB_STATIC) $(LIB_SHARED) example diag csv cst sdo fault phys
+all: $(LIB_STATIC) $(LIB_SHARED) example diag csv cst sdo fault phys multi
 
 example: $(EXAMPLE)
 diag: $(DIAG_EXAMPLE)
@@ -36,6 +37,7 @@ cst: $(CST_EXAMPLE)
 sdo: $(SDO_EXAMPLE)
 fault: $(FAULT_EXAMPLE)
 phys: $(PHYS_EXAMPLE)
+multi: $(MULTI_EXAMPLE)
 
 $(BUILD_DIR):
 	mkdir -p $(BUILD_DIR)
@@ -68,6 +70,9 @@ $(FAULT_EXAMPLE): examples/fault_diag.c $(LIB_STATIC)
 	$(CC) $(CFLAGS) $(CPPFLAGS) -o $@ $< $(LIB_STATIC) $(LDFLAGS) $(LDLIBS)
 
 $(PHYS_EXAMPLE): examples/phys_csp_single.c $(LIB_STATIC)
+	$(CC) $(CFLAGS) $(CPPFLAGS) -o $@ $< $(LIB_STATIC) $(LDFLAGS) $(LDLIBS) -lm
+
+$(MULTI_EXAMPLE): examples/multi_axis_csp.c $(LIB_STATIC)
 	$(CC) $(CFLAGS) $(CPPFLAGS) -o $@ $< $(LIB_STATIC) $(LDFLAGS) $(LDLIBS) -lm
 
 clean:
