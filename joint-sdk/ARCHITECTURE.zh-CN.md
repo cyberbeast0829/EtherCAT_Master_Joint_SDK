@@ -1,7 +1,7 @@
 # 机器人关节 EtherCAT SDK — 架构设计文档
 
-> 版本：v0.4（异步 SDO、故障诊断、单位换算已实现；多轴示例待验证）
-> 状态：CSP/CSV/CST 三模式实物验证通过；PDO padding bug 已修复；ESI 动态加载可用；异步 SDO 读写、故障诊断闭环（自动读取 0x603F/0x1001/0x203F/0x203E）、单位换算（指令单位 ↔ rad/rad·s⁻¹/N·m + 位置展开）均已实现并交付示例；下一阶段为多轴同步验证、L4 C++ 外观层、集成文档与打包。
+> 版本：v0.6（集成文档与打包完成；多轴示例待实物验证）
+> 状态：CSP/CSV/CST 三模式实物验证通过；PDO padding bug 已修复；ESI 动态加载可用；异步 SDO 读写、故障诊断闭环、单位换算、L4 C++ 外观层均已实现；集成文档（README/INSTALL）与打包（make install/pkg-config）已完成；剩余多轴实物验证。
 > 基础平台：IgH EtherCAT Master（用户空间 `libethercat.so` / `ecrt_*` API）
 > 目标：为客户提供一套可集成进其 EtherCAT 主站系统的 SDK，快速、安全地通过 CiA402 协议与本公司机器人关节交互。
 
@@ -12,7 +12,7 @@
 本文档定义 SDK 的整体架构、分层职责、实时模型、配置数据模型与交付方式，并记录当前已落地的 PoC 与 L1/L2/L3 SDK 实现状态。
 
 - **读者**：SDK 研发人员（内部）、集成客户的系统架构师（外部摘要版）。
-- **范围**：架构与接口契约设计、守护兽关节设备 profile、当前实现状态与后续路线。CSP/CSV/CST 三模式 + 异步 SDO + 故障诊断 + 单位换算已通过实物验证；多轴示例、L4 C++ 外观层、集成文档与打包为下一阶段重点。
+- **范围**：架构与接口契约设计、守护兽关节设备 profile、当前实现状态与后续路线。CSP/CSV/CST 三模式 + 异步 SDO + 故障诊断 + 单位换算 + L4 C++ 外观层 + 集成文档与打包均已实现；剩余多轴实物验证。
 
 ---
 
@@ -61,7 +61,7 @@ graph TD
     end
 
     subgraph SDK["机器人关节 SDK"]
-      L4["L4 外观层: C ABI 已实现 / C++ 封装待实现"]
+      L4["L4 外观层: C ABI + C++ JointGroup/Joint 已实现"]
       L3["L3 CiA402 层: 状态机 / 模式管理 / 关节命令反馈"]
       L2["L2 设备配置层: CyberBeast Joint Module profile"]
       L1["L1 传输层: ecrt_* 封装 / 域 / DC / 周期边界"]
@@ -135,7 +135,9 @@ stateDiagram-v2
 
 ### 3.4 L4 — 外观层（客户 API）
 
-当前已实现稳定 C ABI，客户可以把 SDK 嵌入自己的实时循环。C++ `JointGroup` / `Joint` 薄封装仍作为后续计划。
+已实现稳定 C ABI（形态 B）和 C++ 外观层（形态 A + 形态 B）。
+
+**C ABI 用法（嵌入客户实时循环）：**
 
 ```c
 jsdk_context_config_default(&ctx_config);
@@ -157,32 +159,53 @@ while (running) {
 }
 ```
 
+**C++ 外观层用法（JointGroup/Joint，RAII + 内置 RT 线程）：**
+
+```cpp
+#include <joint_sdk/joint_group.hpp>
+
+jsdk::JointGroup group(0, 1000000, 1);  // master0, 1ms, 1 轴
+jsdk::Joint &j = group.addJoint(0, 0, "./ECAT_CIA402.xml");
+group.activate();
+j.enable(JSDK_MODE_CSP);
+
+group.start([&](jsdk::JointGroup &g) {
+    jsdk::Joint &axis = g.joint(0);
+    axis.setTargetPosition(axis.feedback().actual_position);
+});
+
+// ... 主线程等待 Ctrl-C ...
+group.stop();
+```
+
+C++ 头文件 [joint_group.hpp](include/joint_sdk/joint_group.hpp) 为 header-only，仅依赖 C ABI，零额外编译依赖。
+
 ---
 
 ## 4. 实时线程模型
 
-核心 SDK **不强行拥有 RT 线程**，默认采用形态 B：嵌入客户已有实时循环。客户每周期在固定时刻调用 `jsdk_context_cycle_begin()`，完成控制计算后调用 `jsdk_context_cycle_end()`。形态 A（SDK 自带 RT 线程 + 回调）可在 L4 外观层中追加。
+核心 C ABI **不强行拥有 RT 线程**（形态 B）：客户每周期在固定时刻调用 `jsdk_context_cycle_begin()`，完成控制计算后调用 `jsdk_context_cycle_end()`。C++ 外观层 `JointGroup::start(callback)` 额外提供形态 A（内置 RT 线程 + `std::function` 回调）。
 
 ```mermaid
 sequenceDiagram
     participant U as 客户控制逻辑
-  participant RT as 客户/SDK 周期上下文
+    participant RT as 客户/SDK 周期上下文
     participant IgH as ecrt_*
 
     loop 每周期 (如 1ms, DC 同步)
-    U->>RT: jsdk_context_cycle_begin(app_time)
-    RT->>IgH: application_time / receive / domain_process
+        U->>RT: jsdk_context_cycle_begin(app_time)
+        RT->>IgH: application_time / receive / domain_process
         RT->>RT: 反映 Statusword / DS402 迁移 / 单位换算
-    RT-->>U: 返回反馈快照
-    U->>RT: set_target_position/velocity/torque
+        RT-->>U: 返回反馈快照
+        U->>RT: set_target_position/velocity/torque
         RT->>RT: 将 Controlword/Target 写入 PDO
-    U->>RT: jsdk_context_cycle_end()
-    RT->>IgH: sync clocks / domain_queue / send
+        U->>RT: jsdk_context_cycle_end()
+        RT->>IgH: sync clocks / domain_queue / send
     end
 ```
 
-- **形态 B（已实现）**：客户已有 RT 循环时，每周期调用 `jsdk_context_cycle_begin()` / `jsdk_context_cycle_end()`，SDK 不另起线程，对客户系统侵入最小。
-- **形态 A（待实现）**：SDK 自带 RT 线程和 `user_cycle_cb`，适合没有现成实时循环的客户样例或快速验证。
+- **形态 B（已实现，C ABI + C++）**：客户已有 RT 循环时，每周期调用 `jsdk_context_cycle_begin()` / `jsdk_context_cycle_end()`（或 C++ 的 `group.cycle(cb)`），SDK 不另起线程，对客户系统侵入最小。
+- **形态 A（已实现，C++ 外观层）**：`JointGroup::start(callback)` 启动内置 RT 线程，周期由构造参数决定（默认 1 ms），回调内完成控制逻辑，适合没有现成实时循环的客户样例或快速验证。
 - **RT 安全**（遵循 [master/api_usage_notes.md](../../master/api_usage_notes.md)）：周期上下文禁止 sleep/malloc/加锁；SDO 走异步请求（`ecrt_sdo_request_*` + 状态轮询），不阻塞周期；跨线程数据用无锁环/双缓冲。
 
 ---
@@ -196,7 +219,7 @@ sequenceDiagram
 | 电子齿轮、模式切换、PID/限值 | **启动 SDO** | profile 的 `sdo_init` |
 | 运行中参数调整 / 诊断读取 | **异步 SDO** | `j.write_param()/read_param()`（非阻塞，完成通知） |
 
-> 当前初版已实现 PDO 周期读写、启动时模式 SDO（0x6060=CSP）和 DC 配置；运行期异步 SDO 参数/诊断线程仍待实现。
+> 当前已实现 PDO 周期读写、启动时模式 SDO（0x6060=CSP）、DC 配置、运行期异步 SDO 参数读写。
 
 ---
 
@@ -204,7 +227,7 @@ sequenceDiagram
 
 - 返回码 + 详情查询（`jsdk_context_last_error()`）；RT 路径**不抛异常**。
 - 已实现基础分级诊断：总线级（WKC、链路、响应从站数、AL 状态）、从站级（online/operational/AL state）、轴级（Statusword、模式显示、实际位置/速度/力矩、CiA402 状态）。
-- 已实现 `jsdk_joint_request_fault_reset()`；`on_fault(axis, code)` 回调、0x603F/0x1001/0x203E/0x203F 详细 SDO 读取仍待实现。
+- 已实现 `jsdk_joint_request_fault_reset()`、`jsdk_fault_callback_t` 回调、0x603F/0x1001/0x203E/0x203F 详细 SDO 读取。
 
 ---
 
@@ -228,7 +251,7 @@ profile 是 SDK 与具体关节型号之间的契约，至少包含：
 - **核心 = 稳定 C ABI**（`joint_sdk.h`），不依赖客户编译器/语言；版本校验需覆盖 IgH 的 `EC_IOCTL_VERSION_MAGIC` 兼容性。
 - **C++ 头文件薄封装**计划随包提供，当前尚未实现。
 - **依赖隔离**：在 L1 用薄 shim 收拢 `ecrt_*` 调用以吸收 IgH 版本差异，并在文档中标注支持的 IgH 版本范围。
-- **当前交付物**：`libjointsdk.a` / `libjointsdk.so` 构建规则 + C ABI 头文件 + 守护兽 profile + 全模式 CSP/CSV/CST 示例 + 异步 SDO / 故障诊断 / 物理单位示例。多轴同步、C++ 外观层、集成文档与打包仍待补齐。
+- **当前交付物**：`libjointsdk.a` / `libjointsdk.so` + C ABI 头文件 + C++ 外观层头文件 + 守护兽 profile + 全模式示例 + `make install` / pkg-config 打包 + README / INSTALL 集成文档。
 
 ---
 
@@ -236,10 +259,14 @@ profile 是 SDK 与具体关节型号之间的契约，至少包含：
 
 ```
 joint-sdk/
-├── Makefile                 # 构建 libjointsdk.a / libjointsdk.so / 全部示例
+├── Makefile                 # 构建 + make install/uninstall + pkg-config
+├── README.md                # 集成指南（快速开始、最小示例、API 概览）
+├── INSTALL.md               # 安装与依赖说明
+├── joint-sdk.pc.in          # pkg-config 模板
 ├── include/joint_sdk/
 │   ├── joint_sdk.h          # C ABI（已实现）
-│   └── cia402.h             # DS402 常量 / 状态定义（已实现）
+│   ├── cia402.h             # DS402 常量 / 状态定义（已实现）
+│   └── joint_group.hpp      # L4 C++ 外观层 JointGroup/Joint（header-only）
 ├── src/
 │   ├── transport.c          # L1: ecrt_* 封装, domain, DC, 周期边界, ESI 加载,
 │   │                          异步 SDO, 故障诊断, 单位换算
@@ -257,7 +284,8 @@ joint-sdk/
     ├── sdo_diag.c           # 异步 SDO 读写 + --tune 自动调增益
     ├── fault_diag.c         # 故障诊断（回调 + 同步查询）
     ├── phys_csp_single.c    # 物理单位 CSP（rad/rad·s⁻¹/N·m）
-    └── multi_axis_csp.c     # 多轴 CSP（2~N 轴同步）
+    ├── multi_axis_csp.c     # 多轴 CSP（2~N 轴同步）
+    └── cpp_group_csp.cpp    # C++ 外观层示例（形态 A 内置 RT 线程）
 ```
 
 ---
@@ -268,8 +296,9 @@ joint-sdk/
 2. **✅ 已完成：L1/L2/L3 初版 SDK**。L1 传输层、L2 守护兽 profile + ESI 动态加载、L3 DS402 状态机已拆分到 [docs/joint-sdk/sdk](sdk)。
 3. **✅ 已完成：CSP/CSV/CST 三模式联调**。使用诊断示例（`diag_csp_single` / `diag_csv_single` / `diag_cst_single`）验证三模式链路通；修复了 PDO padding 条目偏移 bug。
 4. **✅ 已完成：异步 SDO + 故障诊断闭环 + 单位换算**。运行期非阻塞 SDO 读写、自动故障码读取与回调、指令单位 ↔ rad/rad·s⁻¹/N·m 双向转换 + 位置展开，均已实现并附带 `sdo_diag` / `fault_diag` / `phys_csp_single` 示例。
-5. **🔧 进行中：多轴同步示例 + 文档更新**。多轴 domain 布局验证、DC 参考时钟、单轴故障隔离；架构文档同步至 v0.4。
-6. **待实现：L4 C++ 外观层 + 集成文档与打包**。`JointGroup`/`Joint` C++ 封装、`make install`、pkg-config、客户集成指南。
+5. **🔧 进行中：多轴同步示例**。多轴 domain 布局验证、DC 参考时钟、单轴故障隔离。
+6. **✅ 已完成：L4 C++ 外观层**。`JointGroup`/`Joint` header-only 封装，RAII 生命周期 + 形态 A 内置 RT 线程 + 形态 B 手动 cycle。示例：[cpp_group_csp.cpp](examples/cpp_group_csp.cpp)。
+7. **✅ 已完成：集成文档与打包**。README 集成指南、INSTALL 安装说明、`make install`/`uninstall`、pkg-config 模板（`joint-sdk.pc.in`）。
 
 ---
 
@@ -421,8 +450,8 @@ TPDO（从站→主站，输入）三选一，经 0x1C13:01 选择：
 | **故障诊断闭环** | **✅ 已实现** | Statusword bit3 时自动 SDO 轮询 0x603F→0x1001→0x203F→0x203E，触发 `jsdk_fault_callback_t` 回调 + `jsdk_joint_get_fault_info()` 同步查询。示例：[fault_diag.c](examples/fault_diag.c)。 |
 | **单位换算** | **✅ 已实现** | `jsdk_unit_scale_t` 系数计算 + 6 个物理量 API（rad/rad·s⁻¹/N·m）+ 16→32 bit 位置累计展开。示例：[phys_csp_single.c](examples/phys_csp_single.c)。 |
 | **多轴同步示例** | **🔧 进行中** | 2~N 轴 CSP 同步，验证 domain 布局、DC 参考时钟、单轴故障隔离。[multi_axis_csp.c](examples/multi_axis_csp.c)。 |
-| **L4 C++ 外观层 / 自带 RT 线程** | **🔧 待实现** | `JointGroup` / `Joint` 类封装，RAII 生命周期，回调式 RT 线程（形态 A）。 |
-| 集成文档与打包 | **🔧 待实现** | `make install`、pkg-config、集成指南、API 参考。 |
+| **L4 C++ 外观层** | **✅ 已实现** | [joint_group.hpp](include/joint_sdk/joint_group.hpp) header-only 封装 `JointGroup`/`Joint`，RAII 生命周期 + 形态 A 内置 RT 线程 + 形态 B 手动 cycle。示例：[cpp_group_csp.cpp](examples/cpp_group_csp.cpp)。 |
+| 集成文档与打包 | **✅ 已实现** | [README.md](README.md) 集成指南、[INSTALL.md](INSTALL.md) 安装说明、`make install`/`uninstall`、pkg-config（`joint-sdk.pc.in`）。 |
 
 ---
 
@@ -437,14 +466,7 @@ TPDO（从站→主站，输入）三选一，经 0x1C13:01 选择：
    - 验证 WKC 按从站数正确增长。
    - 验证单轴故障（物理断线或拔电）后其他轴不受影响、WKC 减少、AL state 变化可检测。
 
-### 待实现：L4 C++ 外观层
+### 待实现：多轴实物验证
 
-2. **`JointGroup` / `Joint` 封装**
-   - `JointGroup` 构造 = 自动 create + add_joints，析构 = destroy。
-   - `Joint` 语义化 API（`enable()` / `setTargetPosition()` / `actualPosition()`）。
-   - 形态 A：`JointGroup::start()` 启动内置 RT 线程 + `std::function` 周期回调。
-
-### 待实现：集成文档与打包
-
-3. **集成指南** — 依赖安装、ESI 文件放置、最小示例、API 参考、故障排障。
-4. **打包** — `make install`、`libjointsdk.so` / 头文件 / pkg-config。
+2. **多轴 CSP 实物验证** — 在总线上连接 2~N 个守护兽从站，运行 `multi_axis_csp`，验证 WKC、DC 参考时钟、单轴故障隔离。
+3. **客户交付前的最终回归** — 在干净环境按 INSTALL.md 从头编译安装，验证 pkg-config 与示例。
