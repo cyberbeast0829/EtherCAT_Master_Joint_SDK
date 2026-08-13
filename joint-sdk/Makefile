@@ -1,4 +1,6 @@
 ETHERLAB_DIR ?= /opt/etherlab
+PREFIX ?= /usr/local
+VERSION = 0.5.0
 
 CC      ?= gcc
 CXX     ?= g++
@@ -29,7 +31,7 @@ SDK_SRCS = \
 	src/esi_parser.c
 SDK_OBJS = $(patsubst src/%.c,$(BUILD_DIR)/%.o,$(SDK_SRCS))
 
-.PHONY: all clean example diag csv cst sdo fault phys multi cpp
+.PHONY: all clean example diag csv cst sdo fault phys multi cpp install uninstall
 
 all: $(LIB_STATIC) $(LIB_SHARED) example diag csv cst sdo fault phys multi cpp
 
@@ -81,6 +83,32 @@ $(MULTI_EXAMPLE): examples/multi_axis_csp.c $(LIB_STATIC)
 
 $(CPP_EXAMPLE): examples/cpp_group_csp.cpp $(LIB_STATIC)
 	$(CXX) $(CXXFLAGS) $(CPPFLAGS) -o $@ $< $(LIB_STATIC) $(LDFLAGS) $(LDLIBS) -pthread
+
+# ---- 安装 ----
+
+PC_FILE = $(BUILD_DIR)/joint-sdk.pc
+
+$(PC_FILE): joint-sdk.pc.in | $(BUILD_DIR)
+	sed -e 's|@PREFIX@|$(PREFIX)|g' -e 's|@VERSION@|$(VERSION)|g' $< > $@
+
+install: $(LIB_STATIC) $(LIB_SHARED) $(PC_FILE)
+	install -d $(DESTDIR)$(PREFIX)/lib
+	install -d $(DESTDIR)$(PREFIX)/include/joint_sdk
+	install -d $(DESTDIR)$(PREFIX)/lib/pkgconfig
+	install -m 755 $(LIB_SHARED) $(DESTDIR)$(PREFIX)/lib/
+	install -m 644 $(LIB_STATIC) $(DESTDIR)$(PREFIX)/lib/
+	install -m 644 include/joint_sdk/joint_sdk.h $(DESTDIR)$(PREFIX)/include/joint_sdk/
+	install -m 644 include/joint_sdk/cia402.h $(DESTDIR)$(PREFIX)/include/joint_sdk/
+	install -m 644 include/joint_sdk/joint_group.hpp $(DESTDIR)$(PREFIX)/include/joint_sdk/
+	install -m 644 $(PC_FILE) $(DESTDIR)$(PREFIX)/lib/pkgconfig/
+	@echo "Installed joint-sdk $(VERSION) to $(DESTDIR)$(PREFIX)"
+
+uninstall:
+	rm -f $(DESTDIR)$(PREFIX)/lib/libjointsdk.so
+	rm -f $(DESTDIR)$(PREFIX)/lib/libjointsdk.a
+	rm -f $(DESTDIR)$(PREFIX)/lib/pkgconfig/joint-sdk.pc
+	rm -rf $(DESTDIR)$(PREFIX)/include/joint_sdk
+	@echo "Uninstalled joint-sdk"
 
 clean:
 	rm -rf $(BUILD_DIR)

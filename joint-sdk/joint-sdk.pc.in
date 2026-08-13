@@ -1,0 +1,12 @@
+prefix=@PREFIX@
+exec_prefix=${prefix}
+libdir=${exec_prefix}/lib
+includedir=${prefix}/include
+
+Name: joint-sdk
+Description: CyberBeast robot joint EtherCAT SDK (CiA402 on IgH EtherCAT Master)
+Version: @VERSION@
+Requires:
+Libs: -L${libdir} -ljointsdk
+Libs.private: -lethercat -lm
+Cflags: -I${includedir}

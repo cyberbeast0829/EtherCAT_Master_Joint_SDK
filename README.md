@@ -1,6 +1,139 @@
-# The IgH EtherCAT Master
+# Robot Joint SDK & IgH EtherCAT Master
 
-[[_TOC_]]
+## Table of Contents
+
+- [Introduction](#introduction)
+- [Part 1: Robot Joint SDK](#part-1-robot-joint-sdk)
+- [Part 2: The IgH EtherCAT Master](#part-2-the-igh-ethercat-master)
+
+## Introduction
+
+This repository contains two main parts:
+
+- **Part 1: Robot Joint SDK (`joint-sdk/`)** — our flagship EtherCAT robot-joint integration SDK. Built on CiA402 (CANopen over EtherCAT / CoE), it encapsulates the state machine, PDO mapping, SDO diagnostics, fault handling and unit conversion, letting you drive a joint with just a few lines of code.
+- **Part 2: The IgH EtherCAT Master** — the upstream open-source EtherCAT master implementation (EtherLAB), which is the SDK's underlying dependency. Its full source is kept in this repository for building the dependency and inspecting the low-level implementation.
+
+**Relationship between the two**: Robot Joint SDK is built on top of the IgH EtherCAT Master userspace library `libethercat.so`, hiding the complexity of IgH's low-level `ecrt_*` API. Before using the SDK, you need to build and install IgH EtherCAT Master (see [joint-sdk/INSTALL.md](joint-sdk/INSTALL.md) and the build instructions in Part 2).
+
+---
+
+# Part 1: Robot Joint SDK
+
+## Overview
+
+`joint-sdk` is a CiA402 (CANopen over EtherCAT / CoE) SDK for quickly
+integrating and testing EtherCAT-based robot joints. It encapsulates
+the CiA402 state machine, PDO mapping, and SDO diagnostics, allowing
+you to drive a joint with just a few lines of C code.
+
+The SDK is built on top of IgH EtherCAT Master's userspace library
+(`libethercat.so`) and targets real-time control loops.
+
+### Quick Start
+
+#### Prerequisites
+
+- IgH EtherCAT Master installed (default prefix `/opt/etherlab`);
+  set `ETHERLAB_DIR` if installed elsewhere.
+- GCC, GNU Make.
+
+#### Build
+
+```bash
+cd joint-sdk
+make
+```
+
+This produces:
+
+- `build/libjointsdk.a` — static library
+- `build/libjointsdk.so` — shared library
+- `build/csp_single_sdk` — basic CSP example
+- `build/diag_csp_single` / `build/diag_csv_single` / `build/diag_cst_single` — CSP/CSV/CST diagnostic examples
+- `build/sdo_diag` — async SDO parameter read/write example
+- `build/fault_diag` — fault detection & recovery example
+- `build/phys_csp_single` — CSP with physical units (rad / N·m)
+- `build/multi_axis_csp` — multi-axis CSP example
+- `build/cpp_group_csp` — C++ facade example (built-in RT thread)
+
+#### Run an Example
+
+```bash
+sudo ./build/csp_single_sdk
+```
+
+The example activates the master, configures the first detected joint,
+and runs a sinusoidal CSP (Cyclic Synchronous Position) trajectory.
+
+### Integrating into Your Application
+
+#### Build Flags
+
+```makefile
+CFLAGS  += -I$(JOINT_SDK_DIR)/include -I$(ETHERLAB_DIR)/include
+LDFLAGS += -L$(JOINT_SDK_DIR)/build -L$(ETHERLAB_DIR)/lib \
+           -Wl,-rpath,$(ETHERLAB_DIR)/lib
+LDLIBS  += -ljointsdk -lethercat -lm
+```
+
+Or use pkg-config (after `make install`):
+
+```bash
+gcc my_app.c $(pkg-config --cflags --libs joint-sdk) -o my_app
+```
+
+#### Minimal Code (CSP mode)
+
+```c
+#include <joint_sdk/joint_sdk.h>
+
+jsdk_context_config_t cfg;
+jsdk_joint_config_t jcfg;
+jsdk_context_t *ctx;
+jsdk_joint_t *joint;
+
+jsdk_context_config_default(&cfg);
+cfg.period_ns = 1000000;              /* 1 ms */
+ctx = jsdk_context_create(&cfg);
+
+jcfg.alias = 0;
+jcfg.position = 0;
+jcfg.profile_name = "./ECAT_CIA402.xml";
+jsdk_context_add_joint(ctx, &jcfg, &joint);
+jsdk_context_activate(ctx);
+
+/* real-time loop */
+while (running) {
+    jsdk_context_cycle_begin(ctx, app_time_ns);
+    jsdk_joint_request_enable(joint, JSDK_MODE_CSP);
+    jsdk_joint_set_target_position(joint, target_pos);
+    jsdk_context_cycle_end(ctx);
+}
+```
+
+### API Overview
+
+| Layer | Header | Purpose |
+|-------|--------|---------|
+| Context & Joint | `joint_sdk/joint_sdk.h` | Master lifecycle, joint config, cycle I/O |
+| CiA402 Types | `joint_sdk/cia402.h` | Mode enums, status/control structures |
+| C++ Facade | `joint_sdk/joint_group.hpp` | JointGroup/Joint RAII wrapper |
+
+The SDK supports three CiA402 operating modes:
+
+- **CSP** (Cyclic Synchronous Position, `JSDK_MODE_CSP = 8`)
+- **CSV** (Cyclic Synchronous Velocity, `JSDK_MODE_CSV = 9`)
+- **CST** (Cyclic Synchronous Torque, `JSDK_MODE_CST = 10`)
+
+### Documentation
+
+- [joint-sdk/README.md](joint-sdk/README.md) — Integration guide: quick start, minimal C/C++ examples, mode switching, physical-unit APIs, async SDO, fault diagnostics.
+- [joint-sdk/INSTALL.md](joint-sdk/INSTALL.md) — Installation & dependencies: IgH build, kernel requirements, NIC binding, build/install/uninstall, pkg-config usage.
+- [joint-sdk/ARCHITECTURE.zh-CN.md](joint-sdk/ARCHITECTURE.zh-CN.md) — Architecture design, device profiles, implementation status.
+
+---
+
+# Part 2: The IgH EtherCAT Master
 
 ## General Information
 
@@ -70,99 +203,6 @@ A limited set of the userspace API is available in `libfakeethercat`,
 a library which can be used to run an userspace application
 without an EtherCAT master or with emulated EtherCAT slaves.
 Please find some details in the [Fakelib README](fake_lib/README.md).
-
-## Robot Joint SDK (`joint-sdk`)
-
-`joint-sdk` is a CiA402 (CANopen over EtherCAT / CoE) SDK for quickly
-integrating and testing EtherCAT-based robot joints. It encapsulates
-the CiA402 state machine, PDO mapping, and SDO diagnostics, allowing
-you to drive a joint with just a few lines of C code.
-
-The SDK is built on top of IgH EtherCAT Master's userspace library
-(`libethercat.so`) and targets real-time control loops.
-
-### Quick Start
-
-#### Prerequisites
-
-- IgH EtherCAT Master installed (default prefix `/opt/etherlab`);
-  set `ETHERLAB_DIR` if installed elsewhere.
-- GCC, GNU Make.
-
-#### Build
-
-```bash
-cd joint-sdk
-make
-```
-
-This produces:
-- `build/libjointsdk.a` — static library
-- `build/libjointsdk.so` — shared library
-- `build/csp_single_sdk` — basic CSP example
-- `build/diag_csp_single` — CSP with diagnostic output
-- `build/diag_csv_single` — CSV mode diagnostic example
-- `build/diag_cst_single` — CST mode diagnostic example
-- `build/sdo_diag` — SDO parameter read/write example
-- `build/fault_diag` — fault detection & recovery example
-- `build/phys_csp_single` — CSP with physical unit（角度/力矩）demo
-
-#### Run an Example
-
-```bash
-sudo ./build/csp_single_sdk
-```
-
-The example activates the master, configures the first detected joint,
-and runs a sinusoidal CSP（Cyclic Synchronous Position）trajectory.
-
-### Integrating into Your Application
-
-#### Build Flags
-
-```makefile
-CFLAGS  += -I$(JOINT_SDK_DIR)/include -I$(ETHERLAB_DIR)/include
-LDFLAGS += -L$(JOINT_SDK_DIR)/build -L$(ETHERLAB_DIR)/lib \
-           -Wl,-rpath,$(ETHERLAB_DIR)/lib
-LDLIBS  += -ljointsdk -lethercat -lm
-```
-
-#### Minimal Code (CSP mode)
-
-```c
-#include <joint_sdk/joint_sdk.h>
-
-jsdk_context_config_t cfg = { .master_index = 0, .period_ns = 1000000 };
-jsdk_context_t *ctx;
-jsdk_joint_t *joint;
-
-jsdk_context_create(&cfg, &ctx);
-jsdk_context_add_joint(ctx, 0, NULL, &joint);  // alias=0, auto-detect
-jsdk_context_activate(ctx);
-
-// Real-time loop
-while (running) {
-    jsdk_context_cycle_begin(ctx);
-    jsdk_joint_set_mode(joint, JSDK_MODE_CSP);
-    jsdk_joint_set_target_position(joint, target_pos);
-    jsdk_context_cycle_end(ctx);
-}
-```
-
-### API Overview
-
-| Layer | Header | Purpose |
-|-------|--------|---------|
-| Context & Joint | `joint_sdk/joint_sdk.h` | Master lifecycle, joint config, cycle I/O |
-| CiA402 Types | `joint_sdk/cia402.h` | Mode enums, status/control structures |
-
-The SDK supports three CiA402 operating modes:
-- **CSP** (Cyclic Synchronous Position, `JSDK_MODE_CSP = 8`)
-- **CSV** (Cyclic Synchronous Velocity, `JSDK_MODE_CSV = 9`)
-- **CST** (Cyclic Synchronous Torque, `JSDK_MODE_CST = 10`)
-
-For architecture details and device profile configuration, see
-[`joint-sdk/ARCHITECTURE.zh-CN.md`](joint-sdk/ARCHITECTURE.zh-CN.md).
 
 ## Realtime and Tuning
 
