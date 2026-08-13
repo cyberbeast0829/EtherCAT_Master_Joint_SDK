@@ -1,8 +1,10 @@
 ETHERLAB_DIR ?= /opt/etherlab
 
 CC      ?= gcc
+CXX     ?= g++
 AR      ?= ar
 CFLAGS  ?= -O2 -Wall -Wextra -g -std=c99
+CXXFLAGS ?= -O2 -Wall -Wextra -g -std=c++11
 CPPFLAGS = -Iinclude -I$(ETHERLAB_DIR)/include
 LDFLAGS  = -L$(ETHERLAB_DIR)/lib -Wl,-rpath,$(ETHERLAB_DIR)/lib
 LDLIBS   = -lethercat -lm
@@ -18,6 +20,7 @@ SDO_EXAMPLE = $(BUILD_DIR)/sdo_diag
 FAULT_EXAMPLE = $(BUILD_DIR)/fault_diag
 PHYS_EXAMPLE = $(BUILD_DIR)/phys_csp_single
 MULTI_EXAMPLE = $(BUILD_DIR)/multi_axis_csp
+CPP_EXAMPLE = $(BUILD_DIR)/cpp_group_csp
 
 SDK_SRCS = \
 	src/transport.c \
@@ -26,9 +29,9 @@ SDK_SRCS = \
 	src/esi_parser.c
 SDK_OBJS = $(patsubst src/%.c,$(BUILD_DIR)/%.o,$(SDK_SRCS))
 
-.PHONY: all clean example diag csv cst sdo fault phys multi
+.PHONY: all clean example diag csv cst sdo fault phys multi cpp
 
-all: $(LIB_STATIC) $(LIB_SHARED) example diag csv cst sdo fault phys multi
+all: $(LIB_STATIC) $(LIB_SHARED) example diag csv cst sdo fault phys multi cpp
 
 example: $(EXAMPLE)
 diag: $(DIAG_EXAMPLE)
@@ -38,6 +41,7 @@ sdo: $(SDO_EXAMPLE)
 fault: $(FAULT_EXAMPLE)
 phys: $(PHYS_EXAMPLE)
 multi: $(MULTI_EXAMPLE)
+cpp: $(CPP_EXAMPLE)
 
 $(BUILD_DIR):
 	mkdir -p $(BUILD_DIR)
@@ -74,6 +78,9 @@ $(PHYS_EXAMPLE): examples/phys_csp_single.c $(LIB_STATIC)
 
 $(MULTI_EXAMPLE): examples/multi_axis_csp.c $(LIB_STATIC)
 	$(CC) $(CFLAGS) $(CPPFLAGS) -o $@ $< $(LIB_STATIC) $(LDFLAGS) $(LDLIBS) -lm
+
+$(CPP_EXAMPLE): examples/cpp_group_csp.cpp $(LIB_STATIC)
+	$(CXX) $(CXXFLAGS) $(CPPFLAGS) -o $@ $< $(LIB_STATIC) $(LDFLAGS) $(LDLIBS) -pthread
 
 clean:
 	rm -rf $(BUILD_DIR)
