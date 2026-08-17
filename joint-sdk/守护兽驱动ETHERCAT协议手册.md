@@ -50,13 +50,13 @@ EtherCAT 支持Sync0（DC同步）模式。使用DC机制的时候，当EtherCAT
 
 驱动器作为从站设备支持以下4种基本状态，主站与从站通过状态机执行状态切换，同时在OP状态下所有SDO，TXPDO，RXPDO全部有效 。故在OP状态下执行各种控制
 
-![Image](https://internal-api-drive-stream.feishu.cn/space/api/box/stream/download/authcode/?code=NGY4MGM3NmMxYTIwMGYxYzZlYWE0YmMyYjIzNDExNjRfYWExMzg1YjhkZmJjMTE2ZWNlZDhhZjE5MGUxZDYyOTVfSUQ6NzU2MzE3NjUxNTE0NzY5NDA4NF8xNzgwNTMyNjQ5OjE3ODA2MTkwNDlfVjM)
+![EtherCAT状态机](EtherCAT_State_Machine.png)
 
 ## 伺服状态
 
 使用本驱动器必须按照CiA402协议规定的流程引导伺服驱动器，伺服驱动器才可运行于指定的状态。
 
-![Image](https://internal-api-drive-stream.feishu.cn/space/api/box/stream/download/authcode/?code=NjMyNGFhZmZkYmZiZGJiYjgxNDIyMmFiMDczYTIxMGFfZjdlY2I3ZWQ5ODk0ZDkzYjQxZmJhOGUyM2FjOTZmZjNfSUQ6NzU2MjEyMjU4NTg2ODg5NDIxMV8xNzgwNTMyNjQ5OjE3ODA2MTkwNDlfVjM)
+![伺服状态](Servo_State_Machine.png)
 
 控制字与状态切换解释如下表：
 
