@@ -15,7 +15,7 @@
 		</Groups>
 		<Devices>
 			<Device Physics="YY">
-				<Type ProductCode="#x00080153" RevisionNo="#x00000001">FL90BLW14</Type>
+				<Type ProductCode="#x00080117" RevisionNo="#x00000001">ISVD90RC-300B-100-70</Type>
 				<Name>FL90BLW14</Name>
 				<Info>
 					<StateMachine>

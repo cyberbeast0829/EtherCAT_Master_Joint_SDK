@@ -251,23 +251,30 @@ static int parse_sm(esi_ctx_t *ctx, const char *start, const char *end)
 
 static int parse_rxpdo(esi_ctx_t *ctx, const char *start, const char *end)
 {
-    /* 只解析第一组 RxPdo；后续的 RxPdo（如 0x160D/0x160F/0x1611 备选映射）忽略 */
-    if (ctx->rx_pdo.count) return 0;
-
+    uint16_t pdo_index;
     char sm_str[8] = "";
+    char idx[32] = "";
+    esi_pdo_t tmp;
+
+    /*
+     * Prefer full-featured 0x1600. Keep an earlier PDO only until 0x1600
+     * appears (Modules may list 0x1601/0x1602 afterwards).
+     */
+    if (ctx->rx_pdo.count && ctx->rx_pdo.pdo_index == 0x1600) {
+        return 0;
+    }
+
+    memset(&tmp, 0, sizeof(tmp));
     extract_tag_attr_val(start, (size_t)(end - start),
             "RxPdo", "Sm", sm_str, sizeof(sm_str));
-    ctx->rx_pdo.sm = atoi(sm_str);
+    tmp.sm = atoi(sm_str);
 
-    {
-        char idx[32] = "";
-        if (extract_content(start, (size_t)(end - start),
-                    "Index", idx, sizeof(idx)) != 0) {
-            extract_tag_attr_val(start, (size_t)(end - start),
-                    "Index", "DependOnSlot", idx, sizeof(idx));
-        }
-        ctx->rx_pdo.pdo_index = (uint16_t)parse_hex(idx);
+    if (extract_content(start, (size_t)(end - start),
+                "Index", idx, sizeof(idx)) != 0) {
+        return 0;
     }
+    pdo_index = (uint16_t)parse_hex(idx);
+    tmp.pdo_index = pdo_index;
 
     {
         const char *pos = start;
@@ -297,9 +304,8 @@ static int parse_rxpdo(esi_ctx_t *ctx, const char *start, const char *end)
                         "BitLen", bl, sizeof(bl));
 
                 if (idx[0] && bl[0] &&
-                        ctx->rx_pdo.count < ESI_MAX_PDO_ENTRIES) {
-                    esi_pdo_entry_t *e =
-                        &ctx->rx_pdo.entries[ctx->rx_pdo.count++];
+                        tmp.count < ESI_MAX_PDO_ENTRIES) {
+                    esi_pdo_entry_t *e = &tmp.entries[tmp.count++];
                     e->index = (uint16_t)parse_hex(idx);
                     e->subindex = (uint8_t)atoi(si);
                     e->bitlen = (uint8_t)atoi(bl);
@@ -309,27 +315,39 @@ static int parse_rxpdo(esi_ctx_t *ctx, const char *start, const char *end)
             pos = entry_end;
         }
     }
+
+    if (!tmp.count) {
+        return 0;
+    }
+    if (!ctx->rx_pdo.count || pdo_index == 0x1600) {
+        ctx->rx_pdo = tmp;
+    }
     return 0;
 }
 
 static int parse_txpdo(esi_ctx_t *ctx, const char *start, const char *end)
 {
-    if (ctx->tx_pdo.count) return 0;
-
+    uint16_t pdo_index;
     char sm_str[8] = "";
+    char idx[32] = "";
+    esi_pdo_t tmp;
+
+    /* Prefer full-featured 0x1A00 over later Module alternatives. */
+    if (ctx->tx_pdo.count && ctx->tx_pdo.pdo_index == 0x1A00) {
+        return 0;
+    }
+
+    memset(&tmp, 0, sizeof(tmp));
     extract_tag_attr_val(start, (size_t)(end - start),
             "TxPdo", "Sm", sm_str, sizeof(sm_str));
-    ctx->tx_pdo.sm = atoi(sm_str);
+    tmp.sm = atoi(sm_str);
 
-    {
-        char idx[32] = "";
-        if (extract_content(start, (size_t)(end - start),
-                    "Index", idx, sizeof(idx)) != 0) {
-            extract_tag_attr_val(start, (size_t)(end - start),
-                    "Index", "DependOnSlot", idx, sizeof(idx));
-        }
-        ctx->tx_pdo.pdo_index = (uint16_t)parse_hex(idx);
+    if (extract_content(start, (size_t)(end - start),
+                "Index", idx, sizeof(idx)) != 0) {
+        return 0;
     }
+    pdo_index = (uint16_t)parse_hex(idx);
+    tmp.pdo_index = pdo_index;
 
     {
         const char *pos = start;
@@ -362,9 +380,8 @@ static int parse_txpdo(esi_ctx_t *ctx, const char *start, const char *end)
                         "BitLen", bl, sizeof(bl));
 
                 if (idx[0] && bl[0] &&
-                        ctx->tx_pdo.count < ESI_MAX_PDO_ENTRIES) {
-                    esi_pdo_entry_t *e =
-                        &ctx->tx_pdo.entries[ctx->tx_pdo.count++];
+                        tmp.count < ESI_MAX_PDO_ENTRIES) {
+                    esi_pdo_entry_t *e = &tmp.entries[tmp.count++];
                     e->index = (uint16_t)parse_hex(idx);
                     e->subindex = (uint8_t)atoi(si);
                     e->bitlen = (uint8_t)atoi(bl);
@@ -373,6 +390,13 @@ static int parse_txpdo(esi_ctx_t *ctx, const char *start, const char *end)
 
             pos = entry_end;
         }
+    }
+
+    if (!tmp.count) {
+        return 0;
+    }
+    if (!ctx->tx_pdo.count || pdo_index == 0x1A00) {
+        ctx->tx_pdo = tmp;
     }
     return 0;
 }
@@ -494,33 +518,39 @@ const jsdk_joint_profile_t *esi_profile_load(
         }
     }
 
-    /* RxPdo / TxPdo: search in both <Device> and <Module> blocks */
+    /* RxPdo / TxPdo: walk document in order (do not skip Tx between Rx). */
     {
         const char *pos = xml;
         while (pos < xml + xml_sz) {
-            const char *pdo_start, *pdo_end = NULL;
+            const char *rx = strstr(pos, "<RxPdo ");
+            const char *tx = strstr(pos, "<TxPdo ");
+            const char *pdo_start;
+            const char *pdo_end;
+            int is_rx;
 
-            pdo_start = strstr(pos, "<RxPdo ");
-            if (pdo_start) {
-                pdo_end = strstr(pdo_start, "</RxPdo>");
-                if (!pdo_end) break;
-                pdo_end += strlen("</RxPdo>");
+            if (!rx && !tx) {
+                break;
+            }
+            if (rx && (!tx || rx < tx)) {
+                pdo_start = rx;
+                is_rx = 1;
+            } else {
+                pdo_start = tx;
+                is_rx = 0;
+            }
+
+            pdo_end = strstr(pdo_start, is_rx ? "</RxPdo>" : "</TxPdo>");
+            if (!pdo_end) {
+                break;
+            }
+            pdo_end += is_rx ? strlen("</RxPdo>") : strlen("</TxPdo>");
+
+            if (is_rx) {
                 parse_rxpdo(&ctx, pdo_start, pdo_end);
-                pos = pdo_end;
-                continue;
-            }
-
-            pdo_start = strstr(pos, "<TxPdo ");
-            if (pdo_start) {
-                pdo_end = strstr(pdo_start, "</TxPdo>");
-                if (!pdo_end) break;
-                pdo_end += strlen("</TxPdo>");
+            } else {
                 parse_txpdo(&ctx, pdo_start, pdo_end);
-                pos = pdo_end;
-                continue;
             }
-
-            break;
+            pos = pdo_end;
         }
     }
 
@@ -576,7 +606,7 @@ const jsdk_joint_profile_t *esi_profile_load(
             syncs[3].watchdog_mode = EC_WD_DISABLE;
 
             syncs[4].index = 0xff;
-
+            //syncs[4].index = 0;
             /* RxPDO info */
             rx_pdi->index = ctx.rx_pdo.pdo_index;
             rx_pdi->n_entries = ctx.rx_pdo.count;

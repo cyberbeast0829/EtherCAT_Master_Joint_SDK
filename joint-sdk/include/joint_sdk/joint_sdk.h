@@ -5,6 +5,7 @@
 #include <stddef.h>
 
 #include <joint_sdk/cia402.h>
+#include <joint_sdk/drive_model.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -40,16 +41,81 @@ typedef enum {
 
 typedef struct {
     unsigned int master_index;
+    /** Cyclic task / Sync Unit Cycle (PDO exchange period). */
     uint32_t period_ns;
+    /**
+     * Sync0 shift for ecrt_slave_config_dc().
+     * -1 = default to period_ns/4 (legacy); 0 = explicit zero (TwinCAT).
+     */
     int32_t sync0_shift_ns;
+    /**
+     * Sync0 cycle time. 0 = use period_ns (Sync0 == task cycle).
+     * TwinCAT DC-Synchron often uses Sync Unit × N (e.g. 6 ms with 2 ms task).
+     */
+    uint32_t sync0_cycle_ns;
     unsigned int max_joints;
     int auto_reference_clock;
+    /**
+     * 1 = 启用 DC Sync0（默认）。
+     * 0 = FreeRun。若设置了 drive_model，configure 时会先用型号表，
+     * 再允许本字段覆盖（见 jsdk_context_apply_drive_model）。
+     */
+    int use_dc;
+    /**
+     * Wait after DC AssignActivate before PREOP→SAFEOP (ms).
+     * 0 = use drive_model / SDK default.
+     */
+    unsigned int wait_before_safeop_ms;
+    /**
+     * JSDK_DC_TIMING_SHARED (0) or JSDK_DC_TIMING_PER_JOINT (1).
+     * Default: JSDK_DC_TIMING_MODE_DEFAULT in drive_model.h.
+     */
+    int dc_timing_mode;
 } jsdk_context_config_t;
 
 typedef struct {
     uint16_t alias;
     uint16_t position;
     const char *profile_name;
+    /**
+     * Optional EtherCAT identity override for ecrt_master_slave_config().
+     * 0 = use profile value. Use 0xffffffff to match any product code
+     * (vendor still checked unless also overridden to 0xffffffff).
+     */
+    uint32_t vendor_id;
+    uint32_t product_code;
+    /**
+     * PREOP 初始 CiA402 模式（同时决定 0x2002:1 输入模式）。
+     * 0 = 默认 CSP。CSV 必须设为 JSDK_MODE_CSV，否则若残留
+     * POS_FILTER(3)，速度环会不跟 0x60FF 而饱和飞车。
+     */
+    jsdk_mode_t initial_mode;
+    /**
+     * 0x607E 指令极性。bit0=位置反相，bit6=速度反相（CiA402 常见实现）。
+     * 0 = 不写（保留从站当前值）；非 0 则在 PREOP 写入该值。
+     */
+    int polarity_607e;
+    /**
+     * 0x6080 最大电机速度。0 = 不写（保留从站当前 vel_limit）。
+     * 注意：该对象映射 ODrive vel_limit，单位可能是 turns/s，勿盲目写超大值。
+     */
+    uint32_t max_motor_velocity;
+    /**
+     * Override CyberBeast 0x2002:1 input_mode. 0 = mode default
+     * (CSP→POS_FILTER(3), CSV/CST→PASSTHROUGH(1)). Set 1 for PASSTHROUGH.
+     */
+    int input_mode_2002;
+    /**
+     * Optional drive-model name ("ISVD90RC-v8.1.50") or NULL.
+     * When set, DC Sync0 shift / AssignActivate / FreeRun come from the
+     * model table (see drive_model.h).
+     */
+    const char *drive_model_name;
+    /**
+     * Optional CoE 0x100A firmware string for model lookup, e.g. "8.1.50".
+     * Used when drive_model_name is NULL.
+     */
+    const char *firmware_version;
 } jsdk_joint_config_t;
 
 typedef struct {
@@ -90,6 +156,41 @@ jsdk_status_t jsdk_context_configure(jsdk_context_t *ctx);
 jsdk_status_t jsdk_context_activate(jsdk_context_t *ctx);
 void jsdk_context_deactivate(jsdk_context_t *ctx);
 
+/**
+ * Clear residual SAFEOP+ERROR / sync faults while the master is idle
+ * (ecrt_master_reset + short wait). Called automatically by activate();
+ * product apps may also call after a crash / emergency stop before
+ * re-activate. Does nothing if already activated.
+ */
+jsdk_status_t jsdk_context_recover_bus(jsdk_context_t *ctx);
+
+/**
+ * Apply a drive_model row onto context-config DC fields (use_dc,
+ * sync0_shift_ns, sync0_cycle_ns, wait_before_safeop_ms).
+ * Does not set period_ns — task period is context / conf global
+ * period_ns only (not per-fw preferred_period_ns).
+ * Call after jsdk_context_config_default(), before jsdk_context_create().
+ * CLI may override fields afterwards.
+ */
+void jsdk_context_config_apply_drive_model(jsdk_context_config_t *config,
+        const jsdk_drive_model_t *model);
+
+/**
+ * Load config/dc_timing.conf (or $JSDK_DC_TIMING_CONF) onto context.
+ * Written by dc_timing_setup; applied at context create (PREOP path).
+ * Missing file → leave config unchanged.
+ */
+int jsdk_dc_timing_conf_apply(jsdk_context_config_t *cfg);
+
+/**
+ * conf_apply() plus overlay [fw] Sync0/shift/wait/use_dc into ctx.
+ * Use after apply_drive_model() so PER_JOINT conf is visible on context
+ * (prints / SHARED fields), not only inside configure().
+ * Returns 1 if [fw] was found, 0 if not, -1 on error.
+ */
+int jsdk_dc_timing_conf_apply_fw(jsdk_context_config_t *cfg,
+        const char *fw);
+
 jsdk_status_t jsdk_context_cycle_begin(jsdk_context_t *ctx,
         uint64_t app_time_ns);
 jsdk_status_t jsdk_context_cycle_end(jsdk_context_t *ctx);
@@ -100,6 +201,7 @@ const char *jsdk_context_last_error(jsdk_context_t *ctx);
 
 void jsdk_joint_request_enable(jsdk_joint_t *joint, jsdk_mode_t mode);
 void jsdk_joint_request_disable(jsdk_joint_t *joint);
+void jsdk_joint_request_quick_stop(jsdk_joint_t *joint);
 void jsdk_joint_request_fault_reset(jsdk_joint_t *joint);
 
 void jsdk_joint_set_mode(jsdk_joint_t *joint, jsdk_mode_t mode);

@@ -24,6 +24,7 @@
 #include <sched.h>
 #include <sys/mman.h>
 
+#include <joint_sdk/dc_timing_conf.h>
 #include <joint_sdk/joint_sdk.h>
 
 #define PERIOD_NS 1000000u
@@ -109,6 +110,7 @@ int main(int argc, char **argv)
     ctx_config.master_index = 0;
     ctx_config.period_ns = PERIOD_NS;
     ctx_config.max_joints = 1;
+    jsdk_dc_timing_conf_apply(&ctx_config);
 
     ctx = jsdk_context_create(&ctx_config);
     if (!ctx) { fprintf(stderr, "create ctx failed\n"); return -1; }
@@ -116,7 +118,7 @@ int main(int argc, char **argv)
     memset(&joint_config, 0, sizeof(joint_config));
     joint_config.alias = 0;
     joint_config.position = 0;
-    joint_config.profile_name = "./ECAT_CIA402.xml";
+    joint_config.profile_name = JSDK_PROFILE_CYBERBEAST_JOINT_MODULE;
 
     status = jsdk_context_add_joint(ctx, &joint_config, &joint);
     if (status != JSDK_OK) {
@@ -156,9 +158,9 @@ int main(int argc, char **argv)
     printf("period=%u ns  tune=%s\n", PERIOD_NS,
             tune_mode ? "YES" : "NO");
 
+    /* Do not idle 1s after activate — DC needs application_time immediately. */
     clock_gettime(CLOCK_MONOTONIC, &wakeup_time);
-    wakeup_time.tv_sec += 1;
-    wakeup_time.tv_nsec = 0;
+    add_period(&wakeup_time);
 
     while (running) {
         jsdk_joint_feedback_t f;

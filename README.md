@@ -100,9 +100,10 @@ This produces:
 - `build/libjointsdk.a` — static library
 - `build/libjointsdk.so` — shared library
 - `build/csp_single_sdk` — basic CSP example
-- `build/diag_csp_single` — CSP with diagnostic output
-- `build/diag_csv_single` — CSV mode diagnostic example
-- `build/diag_cst_single` — CST mode diagnostic example
+- `build/diag_csp_single` / `diag_csp_dual` — CSP diagnostic (single/dual)
+- `build/diag_csv_single` / `diag_csv_dual` — CSV diagnostic (single/dual)
+- `build/diag_cst_single` / `diag_cst_dual` — CST diagnostic (single/dual)
+- `build/dc_timing_setup` — DC Sync0 timing config writer
 - `build/sdo_diag` — SDO parameter read/write example
 - `build/fault_diag` — fault detection & recovery example
 - `build/phys_csp_single` — CSP with physical unit（角度/力矩）demo
@@ -163,6 +164,8 @@ The SDK supports three CiA402 operating modes:
 
 For architecture details and device profile configuration, see
 [`joint-sdk/ARCHITECTURE.zh-CN.md`](joint-sdk/ARCHITECTURE.zh-CN.md).
+For Chinese field operation notes (CSP/CSV/CST + DC timing), see
+[`joint-sdk/README.zh-CN.md`](joint-sdk/README.zh-CN.md).
 
 ## Realtime and Tuning
 

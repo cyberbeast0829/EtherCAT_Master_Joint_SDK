@@ -11,6 +11,7 @@
 #include <sched.h>
 #include <sys/mman.h>
 
+#include <joint_sdk/dc_timing_conf.h>
 #include <joint_sdk/joint_sdk.h>
 
 #define PERIOD_NS 1000000u
@@ -92,6 +93,7 @@ int main(int argc, char **argv)
     ctx_config.master_index = 0;
     ctx_config.period_ns = PERIOD_NS;
     ctx_config.max_joints = 1;
+    jsdk_dc_timing_conf_apply(&ctx_config);
 
     ctx = jsdk_context_create(&ctx_config);
     if (!ctx) {
@@ -127,9 +129,10 @@ int main(int argc, char **argv)
     setup_realtime();
 
     printf("Starting SDK CSP example, period=%u ns.\n", PERIOD_NS);
+    /* Start next period immediately — do not idle 1s after activate or DC
+     * StartTime may be programmed with app_time==0 (PREOP→SAFEOP hang). */
     clock_gettime(CLOCK_MONOTONIC, &wakeup_time);
-    wakeup_time.tv_sec += 1;
-    wakeup_time.tv_nsec = 0;
+    add_period(&wakeup_time);
 
     while (running) {
         jsdk_joint_feedback_t feedback;
