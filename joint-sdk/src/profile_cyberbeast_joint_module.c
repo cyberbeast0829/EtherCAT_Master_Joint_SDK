@@ -3,7 +3,8 @@
 #include "internal.h"
 
 #define CYBERBEAST_VENDOR_ID 0x000C0B00u
-#define CYBERBEAST_JOINT_PRODUCT_CODE 0x00080153u
+/* Bus device ISVD90RC-300B-100-70 reports 0x00080117 (not ESI FL90BLW14 0x80153). */
+#define CYBERBEAST_JOINT_PRODUCT_CODE 0x00080117u
 #define CYBERBEAST_JOINT_REVISION_NO 0x00000001u
 #define CYBERBEAST_JOINT_DC_ASSIGN_ACTIVATE 0x0300u
 #define CYBERBEAST_JOINT_MIN_CYCLE_NS 50000u
@@ -75,6 +76,8 @@ const jsdk_joint_profile_t *jsdk_profile_find(const char *name)
             !strcmp(name, "CyberBeast") ||
             !strcmp(name, "FL90BLW14") ||
             !strcmp(name, "cyberbeast_fl90blw14") ||
+            !strcmp(name, "ISVD90RC-300B-100-70") ||
+            !strcmp(name, "ISVD90RC") ||
             !strcmp(name, "default")) {
         return &cb_joint_profile;
     }

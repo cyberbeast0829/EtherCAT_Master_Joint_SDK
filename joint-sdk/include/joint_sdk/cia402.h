@@ -22,8 +22,10 @@ extern "C" {
 
 #define JSDK_CIA402_CW_SHUTDOWN       0x0006u
 #define JSDK_CIA402_CW_SWITCH_ON      0x0007u
+#define JSDK_CIA402_CW_DISABLE_OP     0x0007u /* same value as Switch On; meaning depends on state */
 #define JSDK_CIA402_CW_ENABLE_OP      0x000Fu
-#define JSDK_CIA402_CW_DISABLE_OP     0x0007u
+#define JSDK_CIA402_CW_DISABLE_VOLTAGE 0x0000u
+#define JSDK_CIA402_CW_QUICK_STOP     0x0002u
 #define JSDK_CIA402_CW_FAULT_RESET    0x0080u
 
 #define JSDK_CIA402_SW_FAULT          0x0008u

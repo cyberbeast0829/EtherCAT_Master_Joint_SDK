@@ -55,6 +55,7 @@ typedef struct jsdk_joint_profile {
 typedef struct {
     int enable_requested;
     int fault_reset_requested;
+    int quick_stop_requested;
     int8_t requested_mode;
     uint16_t controlword;
     jsdk_axis_state_t axis_state;
@@ -73,6 +74,21 @@ struct jsdk_joint {
     ec_slave_config_t *sc;
     uint16_t alias;
     uint16_t position;
+    uint32_t attach_vendor_id;
+    uint32_t attach_product_code;
+    int8_t preop_mode;           /* PREOP 0x6060 / 0x2002:1 */
+    int polarity_607e;           /* -1 = skip */
+    int input_mode_2002;         /* -1 = mode default; else 0x2002:1 */
+    uint32_t max_motor_velocity; /* 0 = default */
+    const jsdk_drive_model_t *drive_model; /* optional DC/timing row */
+    uint16_t dc_assign_activate; /* 0 = FreeRun when use_dc=0 */
+    /* TwinCAT-style CSP uses RPDO 0x1601 (CW+pos only). */
+    int csp_compact_rx;
+    const ec_sync_info_t *active_syncs;
+    const ec_pdo_entry_info_t *rx_entries;
+    const ec_pdo_entry_info_t *tx_entries;
+    unsigned int rx_entry_count;
+    unsigned int tx_entry_count;
     jsdk_pdo_offsets_t offsets;
     jsdk_cia402_axis_t cia402;
     jsdk_joint_command_t command;
@@ -94,6 +110,19 @@ struct jsdk_joint {
     int64_t pos_accumulator;   /* 累计位置 (指令单位) 用于 16→32bit 展开 */
     int32_t last_raw_position; /* 上周期原始位置值 */
     int pos_accum_valid;       /* 1 = 累计器已初始化 */
+
+    /*
+     * Consecutive cycles with enable requested but AL≠OP / WC bad.
+     * Force CiA402 disable only after debounce — brief Sync0 glitches
+     * on FW v8.1.50 must not yank Enable Op every cycle.
+     */
+    unsigned int op_loss_cycles;
+    /* >0: write CSP target=actual (WC hole / post-glitch latch). */
+    unsigned int pos_hold_cycles;
+    unsigned int wc_bad_streak;
+    int feedback_pos_valid; /* 1 after first accepted actual_position */
+    /* CSV/CST: consecutive incomplete-WC cycles (debounce before zeroing). */
+    unsigned int wc_miss_cycles;
 };
 
 struct jsdk_context {
@@ -109,6 +138,8 @@ struct jsdk_context {
     unsigned int loaded_profile_capacity;
     int configured;
     int activated;
+    int domain_wc_ok; /* last cycle: WC complete */
+    int sync_dc;      /* 1 = cycle_end runs DC clock sync */
     char last_error[256];
 
     /* 故障回调 */
@@ -122,6 +153,7 @@ const jsdk_joint_profile_t *jsdk_profile_cyberbeast_joint_module(void);
 void jsdk_cia402_init(jsdk_cia402_axis_t *axis, int8_t default_mode);
 void jsdk_cia402_request_enable(jsdk_cia402_axis_t *axis, int8_t mode);
 void jsdk_cia402_request_disable(jsdk_cia402_axis_t *axis);
+void jsdk_cia402_request_quick_stop(jsdk_cia402_axis_t *axis);
 void jsdk_cia402_request_fault_reset(jsdk_cia402_axis_t *axis);
 void jsdk_cia402_update(jsdk_cia402_axis_t *axis, uint16_t statusword);
 
